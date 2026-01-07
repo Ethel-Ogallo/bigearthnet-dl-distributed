@@ -1,5 +1,5 @@
 ## Setup 
 
-``bash
+```bash
 uv sync
 ```
