@@ -26,7 +26,7 @@ uv run scripts/check.py --meta s3://ubs-homes/erasmus/raj/dlproject/metadata_wit
 uv run scripts/check.py --meta s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet --out results_1pct.json --frac 0.01
 ```
 
-### Script 3: Convert to Parquet
+### Script 3: Combnine all data preprocess & create dataset for petastorm
 
 ```bash
 # Convert all data
