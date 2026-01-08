@@ -1,3 +1,21 @@
+"""
+BigEarthNet S3 File Existence Checker
+
+Validates that all BigEarthNet dataset files (S1, S2, and reference maps) exist on S3.
+Reads metadata parquet, checks each patch's S1/S2/reference paths, and outputs results as JSON.
+
+Usage:
+    python scripts/check_s3_files.py \
+        --metadata-path s3://bucket/path/metadata.parquet \
+        --output-path s3://bucket/path/results.json
+
+Output JSON contains:
+    - all_files_found: count of patches with all files present
+    - not_found: count of patches with missing files
+    - missing_patches: list of patches with missing files and which ones are missing
+    - total_checked: total patches checked
+"""
+
 import argparse
 import json
 import boto3
@@ -5,6 +23,7 @@ import pyarrow.parquet as pq
 from tqdm import tqdm
 
 def check_s3_folder_exists(s3_client, s3_path):
+    """Check if S3 folder exists by listing objects with the prefix"""
     if not s3_path or not isinstance(s3_path, str) or not s3_path.startswith('s3://'):
         return False
     
@@ -19,11 +38,15 @@ def check_s3_folder_exists(s3_client, s3_path):
     return 'Contents' in response
 
 def main(metadata_path, output_path):
+    """Main function to check all patches and write results"""
     s3_client = boto3.client('s3')
     
+    # Read metadata from S3
     table = pq.read_table(metadata_path)
     df = table.to_pandas()
     
+    # Check each patch's S1, S2, and reference files
+    # Initialize results tracking
     results = {'all_files_found': 0, 'not_found': 0, 'missing_patches': []}
     
     for idx in tqdm(range(len(df)), desc="Checking files"):
@@ -45,6 +68,7 @@ def main(metadata_path, output_path):
             })
     
     results['total_checked'] = len(df)
+    # Write results to S3 or local file
     
     json_output = json.dumps(results, indent=2)
     
