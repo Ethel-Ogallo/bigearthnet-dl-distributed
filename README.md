@@ -11,6 +11,9 @@ A distributed deep learning project for large-scale remote sensing data analysis
 ![Pandas](https://img.shields.io/badge/Pandas-Analysis-150458?style=flat&logo=pandas&logoColor=white)
 ![AWS S3](https://img.shields.io/badge/AWS%20S3-Storage-569A31?style=flat&logo=amazons3&logoColor=white)
 ![Boto3](https://img.shields.io/badge/Boto3-SDK-FF9900?style=flat&logo=amazonaws&logoColor=white)
+![TensorFlow](https://img.shields.io/badge/TensorFlow-Deep%20Learning-FF6F00?style=flat&logo=tensorflow&logoColor=white)
+![Petastorm](https://img.shields.io/badge/Petastorm-Data%20Pipeline-00ADD8?style=flat&logo=apache&logoColor=white)
+
 
 ## About the Project
 
