@@ -50,33 +50,37 @@ def build_unet_model():
 
 def train_model(data_path, epochs=10, batch_size=32, lr=0.001):
     """Train segmentation model on TFRecord dataset."""
-    # Load TFRecord files from local path or S3
+    temp_dir = None
+    
     if data_path.startswith('s3://'):
-        # Parse S3 path
         s3_path = data_path.replace('s3://', '')
         bucket, prefix = s3_path.split('/', 1)
         
-        # List all .tfrecord files in S3
         s3_client = boto3.client('s3')
         response = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
         
         if 'Contents' not in response:
             raise ValueError(f"No files found in {data_path}")
         
-        tfrecord_files = [
-            f"s3://{bucket}/{obj['Key']}" 
-            for obj in response['Contents'] 
-            if obj['Key'].endswith('.tfrecord')
-        ]
+        s3_files = [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.tfrecord')]
+        print(f"Found {len(s3_files)} TFRecord files in S3, downloading...")
+        
+        temp_dir = tempfile.mkdtemp()
+        tfrecord_files = []
+        
+        for s3_key in s3_files:
+            local_file = os.path.join(temp_dir, os.path.basename(s3_key))
+            s3_client.download_file(bucket, s3_key, local_file)
+            tfrecord_files.append(local_file)
+        
+        print(f"Downloaded to {temp_dir}")
     else:
-        # Local file system
         tfrecord_files = glob.glob(f"{data_path}/*.tfrecord")
     
     if not tfrecord_files:
         raise ValueError(f"No TFRecord files found in {data_path}")
-    print(f"Found {len(tfrecord_files)} TFRecord files in {data_path}")
+    print(f"Processing {len(tfrecord_files)} TFRecord files")
     
-    # Build efficient data pipeline
     dataset = (tf.data.TFRecordDataset(tfrecord_files)
         .map(parse_tfrecord, num_parallel_calls=tf.data.AUTOTUNE)
         .shuffle(1000)
@@ -84,7 +88,6 @@ def train_model(data_path, epochs=10, batch_size=32, lr=0.001):
         .prefetch(tf.data.AUTOTUNE)
         .repeat(epochs))
     
-    # Build and compile model
     model = build_unet_model()
     model.compile(
         optimizer=tf.keras.optimizers.Adam(lr),
@@ -93,7 +96,6 @@ def train_model(data_path, epochs=10, batch_size=32, lr=0.001):
     )
     print(model.summary())
     
-    # Train with early stopping and learning rate reduction
     history = model.fit(
         dataset,
         epochs=epochs,
@@ -102,6 +104,11 @@ def train_model(data_path, epochs=10, batch_size=32, lr=0.001):
             tf.keras.callbacks.ReduceLROnPlateau(patience=2, factor=0.5)
         ]
     )
+    
+    if temp_dir:
+        import shutil
+        shutil.rmtree(temp_dir)
+        print(f"Cleaned up temporary files")
     
     print(f"\nTraining complete! Final accuracy: {history.history['accuracy'][-1]:.4f}")
     return model, history
