@@ -28,7 +28,7 @@ def process_patch(row_dict, target_size=(120, 120)):
     """Process a single patch and return Petastorm-compatible dict"""
     try:
         s2_bands = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12']
-        s3_paths = {'s1_vv': f"{row_dict['s1_path']}/{row_dict['s1_name']}_VV.tif", 's1_vh': f"{row_dict['s1_path']}/{row_dict['s1_name']}_VH.tif", 'reference': f"{row_dict['reference_path']}/{row_dict['patch_id']}_reference_map.tif"}
+        s3_paths = {'s1_vv': f"{row_dict['s1_path']}/{row_dict['s1_name']}_VV.tif", 's1_vh': f"{row_dict['s1_path']}/{row_dict['s1_name']}_VH.tif", 'label': f"{row_dict['reference_path']}/{row_dict['patch_id']}_reference_map.tif"}
         for band in s2_bands:
             s3_paths[f's2_{band}'] = f"{row_dict['s2_path']}/{row_dict['patch_id']}_{band}.tif"
         
@@ -54,13 +54,13 @@ def process_patch(row_dict, target_size=(120, 120)):
             s2_band_arrays.append(band_data)
         s2_data = np.stack(s2_band_arrays, axis=-1).astype(np.float32)
         
-        reference = pad_to_size(file_data['reference'], target_size).astype(np.uint8)
+        label = pad_to_size(file_data['label'], target_size).astype(np.uint8)
         
         return {
             'patch_id': row_dict['patch_id'],
             's1_data': s1_data,
             's2_data': s2_data,
-            'reference': reference,  # Pixel-wise CLC codes (120x120 label map)
+            'label': label,  # Pixel-wise CLC codes (120x120 label map)
         }
     except Exception as e:
         print(f"Error processing {row_dict['patch_id']}: {e}")
@@ -96,7 +96,7 @@ def convert_files(metadata_path, output_path, fraction=1.0, workers=10, batch_si
         ('patch_id', pa.string()),
         ('s1_data', pa.list_(pa.float32(), 28800)),  # 120*120*2 = 28800
         ('s2_data', pa.list_(pa.float32(), 172800)), # 120*120*12 = 172800
-        ('reference', pa.list_(pa.uint8(), 14400)),  # 120*120 CLC codes (pixel-wise labels)
+        ('label', pa.list_(pa.uint8(), 14400)),  # 120*120 CLC codes (pixel-wise labels)
     ])
     
     records = df.to_dict('records')
@@ -117,7 +117,7 @@ def convert_files(metadata_path, output_path, fraction=1.0, workers=10, batch_si
             'patch_id': pa.array([r['patch_id'] for r in results], type=pa.string()),
             's1_data': pa.array([r['s1_data'].flatten().tolist() for r in results], type=pa.list_(pa.float32(), 28800)),
             's2_data': pa.array([r['s2_data'].flatten().tolist() for r in results], type=pa.list_(pa.float32(), 172800)),
-            'reference': pa.array([r['reference'].flatten().tolist() for r in results], type=pa.list_(pa.uint8(), 14400)),
+            'label': pa.array([r['label'].flatten().tolist() for r in results], type=pa.list_(pa.uint8(), 14400)),
         }, schema=schema)
         
         output_file = f"{output_path}/part-{batch_num:05d}.parquet"
