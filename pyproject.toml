@@ -10,7 +10,13 @@ dependencies = [
     "matplotlib>=3.10.8",
     "nbconvert>=7.16.6",
     "pandas>=2.3.3",
+    "petastorm>=0.13.1",
     "pyarrow>=22.0.0",
     "rasterio>=1.5.0",
     "tqdm>=4.67.1",
 ]
+
+[project.scripts]
+gen-metadata = "scripts.gen_metadata:main"
+check-s3 = "scripts.check:main"
+to-peta-parquet = "scripts.to_peta_parquet:main"
