@@ -15,34 +15,28 @@ End-to-end pipeline for BigEarthNet satellite imagery processing and training.
 
 Complete workflow for processing 0.1% of the dataset:
 
+**Step 1: Generate metadata with S3 paths**
+
 ```bash
-# 1. Generate metadata with S3 paths
-uv run gen-metadata \
-  --meta s3://ubs-datasets/bigearthnet/metadata.parquet \
-  --out s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet
+uv run gen-metadata --meta s3://ubs-datasets/bigearthnet/metadata.parquet --out s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet
+```
 
-# 2. Validate files (optional)
-uv run check-s3 \
-  --meta s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet \
-  --out s3://ubs-homes/erasmus/raj/dlproject/1percent/validation.json \
-  --frac 0.001 \
-  --workers 50
+**Step 2: Validate files (optional)**
 
-# 3. Convert to TFRecord
-uv run to-tfrecord \
-  --meta s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet \
-  --out s3://ubs-homes/erasmus/raj/dlproject/1percent/tfrecords \
-  --frac 0.001 \
-  --workers 10 \
-  --batch 100
+```bash
+uv run check-s3 --meta s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet --out s3://ubs-homes/erasmus/raj/dlproject/1percent/validation.json --frac 0.001 --workers 50
+```
 
-# 4. Train model (saves to S3)
-uv run train-model \
-  --data s3://ubs-homes/erasmus/raj/dlproject/1percent/tfrecords \
-  --epochs 10 \
-  --batch 32 \
-  --lr 0.001 \
-  --save s3://ubs-homes/erasmus/raj/dlproject/1percent/model.keras
+**Step 3: Convert to TFRecord**
+
+```bash
+uv run to-tfrecord --meta s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet --out s3://ubs-homes/erasmus/raj/dlproject/1percent/tfrecords --frac 0.001 --workers 10 --batch 100
+```
+
+**Step 4: Train model**
+
+```bash
+uv run train-model --data s3://ubs-homes/erasmus/raj/dlproject/1percent/tfrecords --epochs 10 --batch 32 --lr 0.001 --save s3://ubs-homes/erasmus/raj/dlproject/1percent/model.keras
 ```
 
 ## Data Organization
