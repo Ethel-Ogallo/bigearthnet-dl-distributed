@@ -6,7 +6,6 @@ import os
 import tempfile
 import boto3
 import tensorflow as tf
-import tensorflow_io as tfio
 
 def parse_tfrecord(serialized_example):
     """Parse and decode TFRecord example into tensors."""
