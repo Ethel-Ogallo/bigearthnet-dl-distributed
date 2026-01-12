@@ -1,31 +1,17 @@
-"""Train semantic segmentation model on BigEarthNet TFRecord dataset."""
+"""Train semantic segmentation model on BigEarthNet using Petastorm."""
 
 import argparse
-import glob
 import os
-import tempfile
 
-import boto3
 import tensorflow as tf
+from petastorm import make_reader
 
 
-def parse_tfrecord(serialized_example):
-    """Parse and decode TFRecord example into tensors."""
-    feature_spec = {
-        "patch_id": tf.io.FixedLenFeature([], tf.string),
-        "s1_data": tf.io.FixedLenFeature([], tf.string),  # Sentinel-1 (VV, VH)
-        "s2_data": tf.io.FixedLenFeature([], tf.string),  # Sentinel-2 (12 bands)
-        "label": tf.io.FixedLenFeature([], tf.string),  # CLC land cover codes
-    }
-    example = tf.io.parse_single_example(serialized_example, feature_spec)
-
-    # Decode binary strings to arrays and reshape to original dimensions
-    s1 = tf.reshape(tf.io.decode_raw(example["s1_data"], tf.float32), [120, 120, 2])
-    s2 = tf.reshape(tf.io.decode_raw(example["s2_data"], tf.float32), [120, 120, 12])
-    label = tf.reshape(tf.io.decode_raw(example["label"], tf.uint8), [120, 120])
-
-    # Concatenate S1 and S2 bands into single input tensor (120x120x14)
-    return tf.concat([s1, s2], axis=-1), label
+def transform_row(row):
+    """Transform Petastorm row into training format."""
+    input_data = row["input_data"]
+    label = row["label"]
+    return input_data, label
 
 
 def build_unet_model():
@@ -33,16 +19,13 @@ def build_unet_model():
     return tf.keras.Sequential(
         [
             tf.keras.layers.Input(shape=(120, 120, 14)),
-            # Encoder
             tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
             tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
             tf.keras.layers.MaxPooling2D(),
             tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same"),
             tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same"),
             tf.keras.layers.MaxPooling2D(),
-            # Bottleneck
             tf.keras.layers.Conv2D(256, 3, activation="relu", padding="same"),
-            # Decoder
             tf.keras.layers.UpSampling2D(),
             tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same"),
             tf.keras.layers.UpSampling2D(),
@@ -53,75 +36,60 @@ def build_unet_model():
 
 
 def train_model(data_path, epochs=10, batch_size=32, lr=0.001):
-    """Train segmentation model on TFRecord dataset."""
-    temp_dir = None
+    """Train segmentation model streaming from Petastorm dataset (local or S3)."""
+    strategy = (
+        tf.distribute.MultiWorkerMirroredStrategy()
+    )  # setup the gpu distribution strategy for multiple gpu as shown in class
 
-    if data_path.startswith("s3://"):
-        s3_path = data_path.replace("s3://", "")
-        bucket, prefix = s3_path.split("/", 1)
+    if not data_path.startswith(("s3://", "file://")):
+        data_path = f"file://{os.path.abspath(data_path)}"
 
-        s3_client = boto3.client("s3")
-        response = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    print(f"Streaming data from: {data_path}")
+    print(f"Number of gpu devices: {strategy.num_replicas_in_sync}")
 
-        if "Contents" not in response:
-            raise ValueError(f"No files found in {data_path}")
+    with make_reader(
+        data_path,
+        num_epochs=epochs,
+        hdfs_driver="libhdfs3",
+        reader_pool_type="thread",
+    ) as reader:
 
-        s3_files = [
-            obj["Key"]
-            for obj in response["Contents"]
-            if obj["Key"].endswith(".tfrecord")
-        ]
-        print(f"Found {len(s3_files)} TFRecord files in S3, downloading...")
+        def dataset_fn():
+            dataset = tf.data.Dataset.from_generator(
+                lambda: reader,
+                output_signature={
+                    "input_data": tf.TensorSpec(shape=(120, 120, 14), dtype=tf.float32),
+                    "label": tf.TensorSpec(shape=(120, 120), dtype=tf.uint8),
+                },
+            )
+            return (
+                dataset.map(transform_row, num_parallel_calls=tf.data.AUTOTUNE)
+                .shuffle(1000)
+                .batch(batch_size)
+                .prefetch(tf.data.AUTOTUNE)
+            )
 
-        temp_dir = (
-            tempfile.mkdtemp()
-        )  # TODO : avoid this , we need to stream directly from s3 and use petastorm or something for cache this is almost bullshit but i wanted something that works so that i can visualize the training
-        tfrecord_files = []
+        dataset = strategy.experimental_distribute_dataset(
+            dataset_fn()
+        )  # distributed dataset
 
-        for s3_key in s3_files:
-            local_file = os.path.join(temp_dir, os.path.basename(s3_key))
-            s3_client.download_file(bucket, s3_key, local_file)
-            tfrecord_files.append(local_file)
+        with strategy.scope():
+            model = build_unet_model()
+            model.compile(
+                optimizer=tf.keras.optimizers.Adam(lr),
+                loss="categorical_crossentropy",
+                metrics=["accuracy"],
+            )
 
-        print(f"Downloaded to {temp_dir}")
-    else:
-        tfrecord_files = glob.glob(f"{data_path}/*.tfrecord")
+        print(model.summary())
 
-    if not tfrecord_files:
-        raise ValueError(f"No TFRecord files found in {data_path}")
-    print(f"Processing {len(tfrecord_files)} TFRecord files")
-
-    dataset = (
-        tf.data.TFRecordDataset(tfrecord_files)
-        .map(parse_tfrecord, num_parallel_calls=tf.data.AUTOTUNE)
-        .shuffle(1000)
-        .batch(batch_size)
-        .prefetch(tf.data.AUTOTUNE)
-        .repeat(epochs)
-    )
-
-    model = build_unet_model()
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(lr),
-        loss="sparse_categorical_crossentropy",
-        metrics=["accuracy"],
-    )
-    print(model.summary())
-
-    history = model.fit(
-        dataset,
-        epochs=epochs,
-        callbacks=[
-            tf.keras.callbacks.EarlyStopping(patience=3, restore_best_weights=True),
-            tf.keras.callbacks.ReduceLROnPlateau(patience=2, factor=0.5),
-        ],
-    )
-
-    if temp_dir:
-        import shutil
-
-        shutil.rmtree(temp_dir)
-        print(f"Cleaned up temporary files")
+        history = model.fit(
+            dataset,
+            epochs=epochs,
+            callbacks=[
+                tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True),
+            ],
+        )
 
     print(f"\nTraining complete! Final accuracy: {history.history['accuracy'][-1]:.4f}")
     return model, history
@@ -131,7 +99,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Train BigEarthNet semantic segmentation model"
     )
-    parser.add_argument("--data", required=True, help="Path to TFRecord data directory")
+    parser.add_argument(
+        "--data",
+        required=True,
+        help="Path to Petastorm dataset (local path or s3://bucket/path)",
+    )
     parser.add_argument(
         "--epochs", type=int, default=10, help="Number of training epochs"
     )
