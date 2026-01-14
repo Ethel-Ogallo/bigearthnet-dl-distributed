@@ -7,7 +7,7 @@ import boto3
 from rasterio.io import MemoryFile
 import pyarrow.parquet as pq
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StringType
+from pyspark.sql.types import StringType, IntegerType
 from petastorm.etl.dataset_metadata import materialize_dataset
 from petastorm.unischema import Unischema, UnischemaField, dict_to_spark_row
 from petastorm.codecs import NdarrayCodec, ScalarCodec
@@ -74,7 +74,7 @@ def process_patch(row_dict, target_size=(120, 120)):
             'patch_id': row_dict['patch_id'],
             'input_data': input_data,
             'label': label,
-            'split': row_dict['split']  # NEW add split to the final output -- is this needed?
+            'split': row_dict['split']  
         }
     except Exception as e:
         print(f"Error processing {row_dict['patch_id']}: {e}")
@@ -101,22 +101,29 @@ def split_dataset(df, fraction=1.0):
     return train_df, val_df, test_df
 
 def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, target_size=(120, 120),
-                         workers=10, spark_memory='4g',spark_master='local[*]'):
-    """Convert BigEarthNet patches into Petastorm datasets."""
+                         workers=10, executor_mem='8g', driver_mem='4g', core=4, n_executor=3):
+    """Convert BigEarthNet patches into Petastorm datasets with integer patch IDs."""
     
     print(f"Reading metadata from {metadata_path}")
     table = pq.read_table(metadata_path)
     df = table.to_pandas()
     print(f"Total patches: {len(df)}")
 
+    # Sample and split dataset
     df_sampled = sample_stratified(df, fraction)
     train_df, val_df, test_df = split_dataset(df_sampled)
     datasets = {'train': train_df, 'val': val_df, 'test': test_df}
 
+    # Map patch IDs to integers
+    all_patch_ids = df_sampled['patch_id'].unique()
+    patch_id_to_int = {pid: i for i, pid in enumerate(all_patch_ids)}
+
     input_shape = (*target_size, 6)
     label_shape = target_size
+
+    # Define Petastorm schema
     InputSchema = Unischema('InputSchema', [
-        UnischemaField('patch_id', str, (), ScalarCodec(StringType()), False),
+        UnischemaField('patch_id_int', np.int32, (), ScalarCodec(IntegerType()), False), # as integer because petastorm does not support string keys
         UnischemaField('input_data', np.float32, input_shape, NdarrayCodec(), False),
         UnischemaField('label', np.uint8, label_shape, NdarrayCodec(), False),
     ])
@@ -124,18 +131,18 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, target_size=(1
     output_paths = {}
 
     # Spark session required for Petastorm
-    spark = SparkSession.builder \
-        .master(spark_master) \
-        .appName("Petastorm_BigEarthNet") \
-        .config("spark.driver.memory", spark_memory) \
-        .config("spark.sql.adaptive.enabled", "true") \
-        .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer") \
-        .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.4,com.amazonaws:aws-java-sdk-bundle:1.12.262") \
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider", "com.amazonaws.auth.DefaultAWSCredentialsProviderChain") \
-        .config("spark.hadoop.fs.s3a.path.style.access", "true") \
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "true") \
-        .getOrCreate()  
+    spark = (
+        SparkSession.builder.appName("petastorm_bigearthnet")
+        .config("spark.hadoop.fs.s3a.aws.credentials.provider",
+                "com.amazonaws.auth.DefaultAWSCredentialsProviderChain")
+        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+        .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.1")
+        .config('spark.executor.memory', executor_mem)
+        .config('spark.driver.memory', driver_mem)
+        .config('spark.executor.instances', n_executor)
+        .config('spark.executor.cores', core)
+        .getOrCreate()
+    ) 
 
     sc = spark.sparkContext
 
@@ -158,14 +165,14 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, target_size=(1
 
             def row_generator(data):
                 for item in data:
-                    yield {'patch_id': item['patch_id'],
-                           'input_data': item['input_data'],
-                           'label': item['label']}
+                    yield {
+                        'patch_id_int': patch_id_to_int[item['patch_id']], # map to integer ID
+                        'input_data': item['input_data'],
+                        'label': item['label'],
+                    }
 
             split_path = os.path.join(output_dir, split_name)
-
-            # Create output directory 
-            if not split_path.startswith("s3://") and not split_path.startswith("s3a://"):
+            if not split_path.startswith(("s3://", "s3a://")):
                 os.makedirs(split_path, exist_ok=True)
 
             print(f"Materializing {split_name} dataset at {split_path}...")
@@ -185,6 +192,7 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, target_size=(1
 
     return output_paths
 
+
 # ---- CLI ----
 def main():
     import argparse
@@ -194,8 +202,10 @@ def main():
     parser.add_argument("--frac", type=float, default=1.0, help="Fraction of dataset to sample")
     parser.add_argument("--workers", type=int, default=10, help="Number of parallel threads")
     parser.add_argument("--target_size", type=int, nargs=2, default=[120, 120], help="Target patch size H W")
-    parser.add_argument("--spark_mem", type=str, default="4g", help="Spark driver memory allocation")
-    parser.add_argument("--spark_master", type=str, default="local[*]", help="Spark master URL (local[*] or yarn)")
+    parser.add_argument("--executor-mem", required=False, help="executor memory", default='8g')
+    parser.add_argument("--driver-mem",required=False, help="driver memory", default='4g')
+    parser.add_argument("--core", type=int, default=4) 
+    parser.add_argument("--n_executor", type=int, default=3)
     args = parser.parse_args()
 
     convert_to_petastorm(
@@ -204,21 +214,13 @@ def main():
         fraction=args.frac,
         target_size=tuple(args.target_size),
         workers=args.workers,
-        spark_memory=args.spark_mem,
-        spark_master=args.spark_master
+        executor_mem=args.executor_mem,
+        driver_mem=args.driver_mem,
+        core=args.core,
+        n_executor=args.n_executor
     )
 
 if __name__ == "__main__":
     main()
 
-
-## run using the command:
-# uv run to-petastorm \
-#     --meta s3://ubs-homes/erasmus/ethel/bigearth/metadata_with_paths.parquet \
-#     --out s3a://ubs-homes/erasmus/ethel/bigearth/1percent/petastorm \ 
-#     --frac 0.01 \
-#     --workers 10 \
-#     --target_size 120 120 \
-#     --spark_mem 8g \
-#     --spark_master local[*]
 
