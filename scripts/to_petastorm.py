@@ -1,7 +1,7 @@
 import argparse
 import os
 import numpy as np
-import boto3
+# import boto3
 from rasterio.io import MemoryFile
 import pyarrow.parquet as pq
 from pyspark.sql import SparkSession
@@ -9,16 +9,28 @@ from pyspark.sql.types import IntegerType
 from petastorm.etl.dataset_metadata import materialize_dataset
 from petastorm.unischema import Unischema, UnischemaField, dict_to_spark_row
 from petastorm.codecs import NdarrayCodec, ScalarCodec
+import s3fs 
+import time 
+# # Read S3 GeoTIFF
+# def read_s3_tif(s3_path):
+#     """Download and read GeoTIFF from S3."""
+#     s3_client = boto3.client('s3')
+#     bucket, key = s3_path.replace('s3://', '').split('/', 1)
+#     obj = s3_client.get_object(Bucket=bucket, Key=key)
+#     with MemoryFile(obj['Body'].read()) as memfile:
+#         with memfile.open() as dataset:
+#             return dataset.read()
 
-# Read S3 GeoTIFF
+
+
 def read_s3_tif(s3_path):
-    """Download and read GeoTIFF from S3."""
-    s3_client = boto3.client('s3')
-    bucket, key = s3_path.replace('s3://', '').split('/', 1)
-    obj = s3_client.get_object(Bucket=bucket, Key=key)
-    with MemoryFile(obj['Body'].read()) as memfile:
-        with memfile.open() as dataset:
-            return dataset.read()
+    """Download and read GeoTIFF from S3 using s3fs."""
+    s3fs = s3fs.S3FileSystem()
+    with s3fs.open(s3_path, 'rb') as f:
+        with MemoryFile(f) as memfile:
+            with memfile.open() as dataset:
+                return dataset.read()
+    
 
 # Process a single patch
 def process_patch_stream(row_dict):
@@ -169,7 +181,7 @@ def main():
     parser.add_argument("--core", type=int, default=4) 
     parser.add_argument("--n_executor", type=int, default=3)
     args = parser.parse_args()
-
+    start_time = time.time()
     convert_to_petastorm(
         metadata_path=args.meta,
         output_dir=args.out,
@@ -181,6 +193,8 @@ def main():
         core=args.core,
         n_executor=args.n_executor
     )
+    end_time = time.time()
+    print(f"Conversion completed in {end_time - start_time:.2f} seconds.")
 
 if __name__ == "__main__":
     main()
