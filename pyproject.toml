@@ -19,12 +19,13 @@ dependencies = [
     "tqdm>=4.67.1",
     "numpy<2",
     "pandas<2",
+    "rasterio>=1.3.10"
 ]
 
 [project.scripts]
 gen-metadata = "scripts.gen_metadata:main"
 check-s3 = "scripts.check:main"
-to-tfrecord = "scripts.to_tfrecord:main"
+to-petastorm = "scripts.to_petastorm:main"
 train-model = "scripts.train:main"
 
 [tool.hatch.build.targets.wheel]
