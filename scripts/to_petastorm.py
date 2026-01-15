@@ -12,7 +12,6 @@ from petastorm.unischema import Unischema, UnischemaField, dict_to_spark_row
 from petastorm.codecs import NdarrayCodec, ScalarCodec
 import s3fs 
 import time 
-import boto3
 
 # def read_s3_tif(s3_path):
 #     """Download and read GeoTIFF from S3."""
@@ -25,7 +24,7 @@ import boto3
 
 def read_s3_tif(s3_path):
     """Download and read GeoTIFF from S3."""
-    fs = s3fs.S3FileSystem(anon=False)  # set anon=True if public bucket
+    fs = s3fs.S3FileSystem(anon=False)  
     
     with fs.open(s3_path, 'rb') as f:
         with MemoryFile(f.read()) as memfile:
@@ -129,6 +128,8 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, target_size=(1
 
             print(f"\nProcessing {split_name} split ({len(split_df)} patches)...")
 
+            rowgroup_size_mb = 256
+
             def row_generator(index):
                 row = split_df.iloc[index]
                 patch = process_patch_stream(row)
@@ -148,7 +149,7 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, target_size=(1
                 os.makedirs(split_path, exist_ok=True)
 
             # Streaming generator into Petastorm 
-            with materialize_dataset(spark, split_path, InputSchema) as writer:
+            with materialize_dataset(spark, split_path, InputSchema, rowgroup_size_mb):
                 rows_rdd = (
                     sc.parallelize(range(len(split_df)))
                       .map(row_generator)

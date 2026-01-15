@@ -30,13 +30,13 @@ uv run check-s3 --meta s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.
 **Step 3: Convert to TFRecord**
 
 ```bash
-uv run to-tfrecord --meta s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet --out s3://ubs-homes/erasmus/raj/dlproject/1percent/tfrecords --frac 0.001 --workers 10 --batch 100
+uv run to-petastorm --meta s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet --out s3://ubs-homes/erasmus/raj/dlproject/1percent/petastorm --frac 0.001 --workers 10 --batch 100
 ```
 
 **Step 4: Train model**
 
 ```bash
-uv run train-model --data s3://ubs-homes/erasmus/raj/dlproject/1percent/tfrecords --epochs 10 --batch 32 --lr 0.001 --save s3://ubs-homes/erasmus/raj/dlproject/1percent/model.keras
+uv run train-model --data s3://ubs-homes/erasmus/raj/dlproject/1percent/petastorm --epochs 10 --batch 32 --lr 0.001 --save s3://ubs-homes/erasmus/raj/dlproject/1percent/model.keras
 ```
 
 ## Data Organization

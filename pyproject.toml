@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "bigearthnet-dl-distributed"
 version = "0.0.1"
-description = "Add your description here"
+description = "Distributed computing tools for training deep learning models on BigEarthNet dataset"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -30,3 +30,8 @@ train-model = "scripts.train:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["scripts"]
+
+[dependency-groups]
+dev = [
+    "commitizen>=4.11.3",
+]

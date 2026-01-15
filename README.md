@@ -95,7 +95,7 @@ uv sync
 This installs the project and makes the following commands available:
 - `uv run gen-metadata` - Generate metadata with S3 paths
 - `uv run check-s3` - Validate file availability
-- `uv run to-tfrecord` - Convert TIF to TFRecord
+- `uv run to-petastorm` - Convert TIF to TFRecord
 - `uv run train-model` - Train segmentation model
 
 ## Usage
