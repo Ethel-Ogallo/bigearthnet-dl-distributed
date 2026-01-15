@@ -4,7 +4,7 @@ import argparse
 import os
 import tempfile
 
-import boto3
+# import boto3
 import tensorflow as tf
 from petastorm import make_reader
 from pyarrow import parquet as pq
@@ -162,24 +162,24 @@ def main():
     parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
     parser.add_argument("--batch", type=int, default=32, help="Batch size")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
-    parser.add_argument("--save", help="Path to save trained model (.keras)")
+    # parser.add_argument("--save", help="Path to save trained model (.keras)")
 
     args = parser.parse_args()
     model, _ = train_model(args.data, args.epochs, args.batch, args.lr)
 
-    if args.save:
-        if args.save.startswith("s3://"):
-            with tempfile.TemporaryDirectory() as tmpdir:
-                local_path = os.path.join(tmpdir, "model.keras")
-                model.save(local_path)
-                s3_path = args.save.replace("s3://", "")
-                bucket, key = s3_path.split("/", 1)
-                s3_client = boto3.client("s3")
-                s3_client.upload_file(local_path, bucket, key)
-                print(f"Model saved to {args.save}")
-        else:
-            model.save(args.save)
-            print(f"Model saved to {args.save}")
+    # if args.save:
+    #     if args.save.startswith("s3://"):
+    #         with tempfile.TemporaryDirectory() as tmpdir:
+    #             local_path = os.path.join(tmpdir, "model.keras")
+    #             model.save(local_path)
+    #             s3_path = args.save.replace("s3://", "")
+    #             bucket, key = s3_path.split("/", 1)
+    #             s3_client = boto3.client("s3")
+    #             s3_client.upload_file(local_path, bucket, key)
+    #             print(f"Model saved to {args.save}")
+    #     else:
+    #         model.save(args.save)
+    #         print(f"Model saved to {args.save}")
 
 
 if __name__ == "__main__": 
