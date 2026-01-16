@@ -104,7 +104,7 @@ def convert_to_petastorm(
                 "com.amazonaws.auth.DefaultAWSCredentialsProviderChain",
             )
             .config(
-                "spark.hadoop.fs.s3a.impl", "org.apache.hadoop. fs.s3a.S3AFileSystem"
+                "spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem"
             )
             .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.1")
             .config("spark.executor.memory", executor_mem)
