@@ -25,7 +25,7 @@ def process_patch_stream(row_dict):
     try:
         s2_bands = ["B02", "B03", "B04", "B08"]
         s3_paths = {
-            "s1_vv": f"{row_dict['s1_path']}/{row_dict['s1_name']}_VV. tif",
+            "s1_vv": f"{row_dict['s1_path']}/{row_dict['s1_name']}_VV.tif",
             "s1_vh": f"{row_dict['s1_path']}/{row_dict['s1_name']}_VH.tif",
             "label": f"{row_dict['reference_path']}/{row_dict['patch_id']}_reference_map.tif",
         }
