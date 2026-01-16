@@ -103,7 +103,7 @@ def get_dataset_size(path):
 
     except Exception as e:
         print(f"Warning: Could not read metadata for {path}: {e}")
-        return None
+        return None, None, None
 
 
 def verify_s3_paths(base_path):
