@@ -10,24 +10,22 @@ from petastorm.unischema import Unischema, UnischemaField, dict_to_spark_row
 from pyspark.sql import SparkSession
 from rasterio.io import MemoryFile
 
+from .profiler import Profiler
+
 
 def read_s3_tif(s3_path):
-    """Download and read GeoTIFF from S3."""
     fs = s3fs.S3FileSystem(anon=False)
-
     with fs.open(s3_path, "rb") as f:
         with MemoryFile(f.read()) as memfile:
             with memfile.open() as dataset:
                 return dataset.read()
 
 
-# Process a single patch
 def process_patch_stream(row_dict):
-    """Download and combine S1, S2, and label data for a single patch."""
     try:
         s2_bands = ["B02", "B03", "B04", "B08"]
         s3_paths = {
-            "s1_vv": f"{row_dict['s1_path']}/{row_dict['s1_name']}_VV.tif",
+            "s1_vv": f"{row_dict['s1_path']}/{row_dict['s1_name']}_VV. tif",
             "s1_vh": f"{row_dict['s1_path']}/{row_dict['s1_name']}_VH.tif",
             "label": f"{row_dict['reference_path']}/{row_dict['patch_id']}_reference_map.tif",
         }
@@ -36,12 +34,10 @@ def process_patch_stream(row_dict):
                 f"{row_dict['s2_path']}/{row_dict['patch_id']}_{band}.tif"
             )
 
-        # serially download files
         file_data = {}
         for key, path in s3_paths.items():
             file_data[key] = read_s3_tif(path)[0]
 
-        # Stack S1 + S2
         s1_data = np.stack([file_data["s1_vv"], file_data["s1_vh"]], axis=-1).astype(
             np.float32
         )
@@ -49,22 +45,15 @@ def process_patch_stream(row_dict):
             [file_data[f"s2_{band}"] for band in s2_bands], axis=-1
         ).astype(np.float32)
         image = np.concatenate([s1_data, s2_data], axis=-1).astype(np.float32)
-
         label = file_data["label"].astype(np.uint8)
 
-        return {
-            "image": image,
-            "label": label,
-        }
-
+        return {"image": image, "label": label}
     except Exception as e:
         print(f"Error processing {row_dict['patch_id']}: {e}")
         return None
 
 
-# Split and sample DataFrame
 def split_and_sample(df, fraction=1.0):
-    """Split DataFrame into train, val, test and sample fraction from each split."""
     splits = {}
     for split_name in ["train", "validation", "test"]:
         split_df = df[df["split"] == split_name]
@@ -74,7 +63,6 @@ def split_and_sample(df, fraction=1.0):
     return splits["train"], splits["validation"], splits["test"]
 
 
-# Convert files to petastorm
 def convert_to_petastorm(
     metadata_path,
     output_dir,
@@ -85,38 +73,57 @@ def convert_to_petastorm(
     core=4,
     n_executor=3,
 ):
-    """Convert patches into Petastorm datasets using streaming generator."""
-    print(f"Reading metadata from {metadata_path}")
-    table = pq.read_table(metadata_path.replace("s3a://", "s3://"))
-    df = table.to_pandas()
-    print(f"Total patches: {len(df)}")
+    profiler = Profiler()
 
-    train_df, val_df, test_df = split_and_sample(df, fraction)
-    datasets = {"train": train_df, "validation": val_df, "test": test_df}
+    with profiler.step("read_metadata"):
+        print(f"Reading metadata from {metadata_path}")
+        table = pq.read_table(metadata_path.replace("s3a://", "s3://"))
+        df = table.to_pandas()
+        print(f"Total patches: {len(df)}")
 
-    # Start Spark session
-    spark = (
-        SparkSession.builder.appName("petastorm_bigearthnet")
-        .config(
-            "spark.hadoop.fs.s3a.aws.credentials.provider",
-            "com.amazonaws.auth.DefaultAWSCredentialsProviderChain",
+    profiler.record("total_patches", len(df))
+
+    with profiler.step("split_and_sample", fraction=fraction):
+        train_df, val_df, test_df = split_and_sample(df, fraction)
+        datasets = {"train": train_df, "validation": val_df, "test": test_df}
+
+    profiler.record("train_samples", len(train_df))
+    profiler.record("validation_samples", len(val_df))
+    profiler.record("test_samples", len(test_df))
+
+    with profiler.step(
+        "spark_init",
+        executor_mem=executor_mem,
+        driver_mem=driver_mem,
+        cores=core,
+        executors=n_executor,
+    ):
+        spark = (
+            SparkSession.builder.appName("petastorm_bigearthnet")
+            .config(
+                "spark.hadoop.fs.s3a.aws.credentials.provider",
+                "com.amazonaws.auth.DefaultAWSCredentialsProviderChain",
+            )
+            .config(
+                "spark.hadoop.fs.s3a.impl", "org.apache.hadoop. fs.s3a.S3AFileSystem"
+            )
+            .config("spark.executor.memory", executor_mem)
+            .config("spark.driver.memory", driver_mem)
+            .config("spark.executor.instances", n_executor)
+            .config("spark.executor.cores", core)
+            .getOrCreate()
         )
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        # .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.1")
-        .config("spark.executor.memory", executor_mem)
-        .config("spark.driver.memory", driver_mem)
-        .config("spark.executor.instances", n_executor)
-        .config("spark.executor.cores", core)
-        .getOrCreate()
-    )
+
+    profiler.record("spark_executors", n_executor)
+    profiler.record("spark_cores", core)
+    profiler.record("spark_executor_memory", executor_mem)
+    profiler.record("spark_driver_memory", driver_mem)
 
     sc = spark.sparkContext
     output_paths = {}
-
     input_shape = (*target_size, 6)
     label_shape = target_size
 
-    # Petastorm schema
     InputSchema = Unischema(
         "InputSchema",
         [
@@ -132,46 +139,49 @@ def convert_to_petastorm(
 
             print(f"\nProcessing {split_name} split ({len(split_df)} patches)...")
 
-            rowgroup_size_mb = 256
+            with profiler.step(f"process_{split_name}", patches=len(split_df)):
+                rowgroup_size_mb = 256
 
-            def row_generator(index):
-                row = split_df.iloc[index]
-                patch = process_patch_stream(row)
-                if patch:
-                    return dict_to_spark_row(
-                        InputSchema,
-                        {
-                            "image": patch["image"],
-                            "label": patch["label"],
-                        },
-                    )
-                return None
+                def row_generator(index):
+                    row = split_df.iloc[index]
+                    patch = process_patch_stream(row)
+                    if patch:
+                        return dict_to_spark_row(
+                            InputSchema,
+                            {"image": patch["image"], "label": patch["label"]},
+                        )
+                    return None
 
-            split_path = os.path.join(output_dir, split_name)
-            if not split_path.startswith(("s3://", "s3a://")):
-                os.makedirs(split_path, exist_ok=True)
+                split_path = os.path.join(output_dir, split_name)
+                if not split_path.startswith(("s3://", "s3a://")):
+                    os.makedirs(split_path, exist_ok=True)
 
-            # Streaming generator into Petastorm
-            with materialize_dataset(spark, split_path, InputSchema, rowgroup_size_mb):
-                rows_rdd = (
-                    sc.parallelize(range(len(split_df)))
-                    .map(row_generator)
-                    .filter(lambda x: x is not None)
-                )
-                rows_df = spark.createDataFrame(rows_rdd, InputSchema.as_spark_schema())
-                rows_df.write.mode("overwrite").parquet(split_path)
+                with profiler.step(f"write_{split_name}_parquet"):
+                    with materialize_dataset(
+                        spark, split_path, InputSchema, rowgroup_size_mb
+                    ):
+                        rows_rdd = (
+                            sc.parallelize(range(len(split_df)))
+                            .map(row_generator)
+                            .filter(lambda x: x is not None)
+                        )
+                        rows_df = spark.createDataFrame(
+                            rows_rdd, InputSchema.as_spark_schema()
+                        )
+                        rows_df.write.mode("overwrite").parquet(split_path)
 
-            output_paths[split_name] = split_path
-            print(f"{split_name} dataset saved: {split_path}")
+                output_paths[split_name] = split_path
+                print(f"{split_name} dataset saved:  {split_path}")
 
     finally:
-        spark.stop()
-        print("Spark session stopped.")
+        with profiler.step("spark_stop"):
+            spark.stop()
+            print("Spark session stopped.")
 
+    profiler.save(output_dir)
     return output_paths
 
 
-# ---- CLI ----
 def main():
     import argparse
 
@@ -202,6 +212,7 @@ def main():
     parser.add_argument("--core", type=int, default=2)
     parser.add_argument("--n_executor", type=int, default=2)
     args = parser.parse_args()
+
     start_time = time.time()
     convert_to_petastorm(
         metadata_path=args.meta,
