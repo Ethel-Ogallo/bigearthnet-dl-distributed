@@ -120,8 +120,9 @@ def verify_s3_paths(base_path):
             print(f"Found s3://{path}")
 
 
-def train_model(data_path, epochs=10, batch_size=32, lr=0.001):
+def train_model(data_path, epochs=10, batch_size=32, lr=0.001, args_str=""):
     profiler = Profiler()
+    profiler.log(f"Args: {args_str}")
 
     with profiler.step("gpu_setup"):
         num_gpus = print_gpu_info()
@@ -237,7 +238,7 @@ def main():
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
 
     args = parser.parse_args()
-    train_model(args.data, args.epochs, args.batch, args.lr)
+    train_model(args.data, args.epochs, args.batch, args.lr, args_str=str(args))
 
 
 if __name__ == "__main__":

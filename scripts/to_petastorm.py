@@ -72,8 +72,10 @@ def convert_to_petastorm(
     driver_mem="4g",
     core=4,
     n_executor=3,
+    args_str="",
 ):
     profiler = Profiler()
+    profiler.log(f"Args: {args_str}")
 
     with profiler.step("read_metadata"):
         print(f"Reading metadata from {metadata_path}")
@@ -227,6 +229,7 @@ def main():
         driver_mem=args.driver_mem,
         core=args.core,
         n_executor=args.n_executor,
+        args_str=str(args),
     )
     end_time = time.time()
     print(f"Conversion completed in {end_time - start_time:.2f} seconds.")
