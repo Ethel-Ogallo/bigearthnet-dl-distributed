@@ -182,7 +182,7 @@ def convert_to_petastorm(
             spark.stop()
             print("Spark session stopped.")
 
-    profiler.save(output_dir)
+    profiler.save(output_dir, name="conversion")
     return output_paths
 
 

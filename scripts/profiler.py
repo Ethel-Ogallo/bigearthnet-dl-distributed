@@ -37,7 +37,7 @@ class Profiler:
     def record(self, key, value):
         self.metrics["summary"][key] = value
 
-    def save(self, output_dir):
+    def save(self, output_dir, name="profile"):
         import s3fs
 
         self.metrics["end_time"] = datetime.now().isoformat()
@@ -48,8 +48,8 @@ class Profiler:
         base_dir = output_dir.replace("s3a://", "s3://") if is_s3 else output_dir
         profile_dir = f"{base_dir}/profile"
 
-        json_path = f"{profile_dir}/profile.json"
-        log_path = f"{profile_dir}/profile.log"
+        json_path = f"{profile_dir}/{name}_profile.json"
+        log_path = f"{profile_dir}/{name}_profile.log"
 
         json_content = json.dumps(self.metrics, indent=2)
         log_lines = [f"Profile Report - {self.metrics['start_time']}\n{'='*60}\n"]
@@ -65,7 +65,7 @@ class Profiler:
 
         log_lines.append(f"\n{'='*60}\n")
         log_lines.append(
-            f"Total:  {self.metrics['summary']. get('total_duration', 0):.2f}s\n"
+            f"Total:  {self.metrics['summary'].get('total_duration', 0):.2f}s\n"
         )
 
         for key, val in self.metrics["summary"].items():

@@ -210,7 +210,7 @@ def train_model(data_path, epochs=10, batch_size=32, lr=0.001):
     profiler.record("final_train_accuracy", float(history.history["accuracy"][-1]))
     profiler.record("epochs_completed", len(history.history["accuracy"]))
 
-    profiler.save(data_path)
+    profiler.save(data_path, name="train")
 
     return model, history
 
