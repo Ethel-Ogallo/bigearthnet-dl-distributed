@@ -46,12 +46,20 @@ For more information, visit: https://bigearth.net/
 
 ```
 bigearthnet-dl-distributed/
-├── notebooks/          # Jupyter notebooks for exploration and analysis
-├── scripts/            # Python scripts (converted from notebooks or standalone)
-├── experiments/        # Experiment configurations and results
-├── results/            # Generated reports and analysis outputs
-├── main.py             # entry point
-└── pyproject.toml      # Project dependencies and configuration
+├── scripts/
+│   ├── bash/
+│   │   ├── run_conversion.sh    # Convert data for multiple percentages
+│   │   └── run_training.sh      # Train on multiple datasets
+│   ├── gen_metadata.py          # Generate metadata with S3 paths
+│   ├── check.py                 # Validate S3 file availability
+│   ├── to_petastorm.py          # Convert TIF to Petastorm format
+│   ├── train.py                 # Train U-Net segmentation model
+│   ├── profiler.py              # Performance profiling utility
+│   └── Readme.md                # Detailed script documentation
+├── notebooks/                    # Jupyter notebooks for exploration
+├── experiments/                  # Experiment outputs and results
+├── pyproject.toml               # Project dependencies
+└── README.md                    # This file
 ```
 
 ## Setup
@@ -60,6 +68,8 @@ bigearthnet-dl-distributed/
 
 - Python 3.12 or higher
 - [uv](https://github.com/astral-sh/uv) - Fast Python package installer
+- AWS credentials configured for S3 access
+- Apache Spark (for data conversion)
 
 ### Install uv
 
@@ -82,38 +92,151 @@ pip install uv
 
 Once `uv` is installed, set up the project:
 
-```bash
-# Clone the repository (if not already)
-git clone https://github.com/kshitijrajsharma/fractal-ml-distributed-computing.git
-```
 
 ```bash
+# Clone the repository
+git clone https://github.com/krschap/bigearthnet-dl-distributed.git
 cd bigearthnet-dl-distributed
+
+# Install dependencies
 uv sync
 ```
 
-This installs the project and makes the following commands available:
-- `uv run gen-metadata` - Generate metadata with S3 paths
-- `uv run check-s3` - Validate file availability
-- `uv run to-petastorm` - Convert TIF to TFRecord
-- `uv run train-model` - Train segmentation model
+This makes the following commands available:
+- uv run gen-metadata - Generate metadata with S3 paths
+- uv run check-s3 - Validate file availability
+- uv run train-model - Train segmentation model
 
-## Usage
+Note: to_petastorm.py should be run using spark-submit (not uv run) as it uses Spark internally.
 
-See [scripts/Readme.md](scripts/Readme.md) for detailed usage examples and parameters.
+## Quick Start
 
-Use JupyterLab, VS Code, or Jupyter Notebook to work with notebooks.
-jupyter nbconvert --to script notebooks/01-preliminary.ipynb --output-dir=scripts/
-```
+### Step 1: One-Time Setup
 
-**Run scripts:**
+Generate metadata with S3 file paths:
+
 ```bash
-python scripts/01-preliminary.py
+uv run gen-metadata \
+  --meta s3://ubs-datasets/bigearthnet/metadata.parquet \
+  --out s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet
 ```
+
+### Step 2: Convert Data to Petastorm Format
+
+Option A: Convert multiple percentages using bash script
+
+```bash
+./scripts/bash/run_conversion.sh experiment_1
+```
+
+This processes 1%, 3%, 5%, 7%, and 10% of the data and creates:
+```
+s3://ubs-homes/erasmus/raj/dlproject/experiments/experiment_1/petastorm/
+├── 1percent/
+├── 3percent/
+├── 5percent/
+├── 7percent/
+└── 10percent/
+```
+
+Option B: Convert single percentage manually using spark-submit
+
+```bash
+spark-submit \
+  --master yarn \
+  --deploy-mode client \
+  --packages ch.cern.sparkmeasure:spark-measure_2.12:0.27 \
+  scripts/to_petastorm.py \
+  --meta s3://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet \
+  --out s3://ubs-homes/erasmus/raj/dlproject/testpercent/petastorm \
+  --frac 0.01 \
+  --executor-mem 8g \
+  --driver-mem 4g \
+  --core 4 \
+  --n_executor 3
+```
+
+### Step 3: Train Models
+
+Option A: Train on all converted datasets
+
+```bash
+./scripts/bash/run_training.sh experiment_1
+```
+
+Option B: Train on single dataset
+
+```bash
+uv run train-model \
+  --data s3://ubs-homes/erasmus/raj/dlproject/testpercent/petastorm \
+  --epochs 10 \
+  --batch 16 \
+  --lr 0.001
+```
+
+## Configuration
+
+To modify script parameters, edit the configuration values directly in the bash scripts:
+
+**scripts/bash/run_conversion.sh:**
+```bash
+EXECUTOR_MEM="8g"        # Spark executor memory
+DRIVER_MEM="4g"          # Spark driver memory
+CORES="4"                # Cores per executor
+N_EXECUTORS="3"          # Number of executors
+SPARK_PACKAGES="ch.cern.sparkmeasure:spark-measure_2.12:0.27"
+```
+
+**scripts/bash/run_training.sh:**
+```bash
+EPOCHS="10"              # Training epochs
+BATCH_SIZE="16"          # Batch size per replica
+LEARNING_RATE="0.001"    # Learning rate
+```
+
+## Data Organization
+
+The pipeline creates the following S3 structure:
+
+```
+s3://ubs-homes/erasmus/raj/dlproject/
+├── metadata_with_paths.parquet
+└── experiments/
+    └── experiment_1/
+        └── petastorm/
+            ├── 1percent/
+            │   ├── train/           # Training data
+            │   ├── validation/      # Validation data
+            │   ├── test/            # Test data
+            │   └── profile/
+            │       ├── conversion_profile.json
+            │       ├── conversion_profile.log
+            │       ├── train_profile.json
+            │       └── train_profile.log
+            ├── 3percent/
+            ├── 5percent/
+            ├── 7percent/
+            └── 10percent/
+```
+
+## Profiling
+
+Both conversion and training scripts generate detailed performance profiles:
+
+- conversion_profile.json/log: Data processing metrics, Spark configuration, timing information
+- train_profile.json/log: GPU usage, training metrics, evaluation results
+
+Profiles are saved to: {output_dir}/profile/
+
+## Documentation
+
+For detailed script usage, parameters, and examples, see:
+- scripts/Readme.md - Comprehensive script documentation
+- scripts/bash/ - Bash script examples
 
 ## Data Access
 
-For this project, BigEarthNet data has been downloaded and stored on S3. You can download the dataset from [bigearth.net](https://bigearth.net/) and organize it in the following structure:
+The BigEarthNet data should be organized on S3 as follows:
 
 ```
 s3://your-bucket/bigearthnet/
@@ -122,10 +245,12 @@ s3://your-bucket/bigearthnet/
 ├── BigEarthNet-S2/
 └── Reference_Maps/
 ```
+
+Download the dataset from: https://bigearth.net/
+
 ## Resources
 
-- [BigEarthNet Official Website](https://bigearth.net/)
-- [Dataset Documentation](https://bigearth.net/static/documents/Description_BigEarthNet_v2.pdf)
-- [BigEarthNet Pipeline (GitHub)](https://github.com/rsim-tu-berlin/bigearthnet-pipeline)
-- [uv Documentation](https://docs.astral.sh/uv/)
-
+- BigEarthNet Official Website: https://bigearth.net/
+- Dataset Documentation: https://bigearth.net/static/documents/Description_BigEarthNet_v2.pdf
+- BigEarthNet Pipeline: https://github.com/rsim-tu-berlin/bigearthnet-pipeline
+- uv Documentation: https://docs.astral.sh/uv/
