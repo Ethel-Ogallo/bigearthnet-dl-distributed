@@ -35,7 +35,7 @@ def build_unet_model():
     return tf.keras.Sequential(
         [
             tf.keras.layers.Input(shape=(120, 120, 6)),
-            # Encoder path
+            # Encoder 
             tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
             tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
             tf.keras.layers.MaxPooling2D(),
@@ -44,12 +44,12 @@ def build_unet_model():
             tf.keras.layers.MaxPooling2D(),
             # Bottleneck
             tf.keras.layers.Conv2D(256, 3, activation="relu", padding="same"),
-            # Decoder path
+            # Decoder 
             tf.keras.layers.UpSampling2D(),
             tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same"),
             tf.keras.layers.UpSampling2D(),
             tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
-            # Output layer (256 classes)
+            # Output
             tf.keras.layers.Conv2D(256, 1, activation="softmax"),
         ]
     )
