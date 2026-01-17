@@ -171,7 +171,7 @@ def train_model(data_path, epochs=10, batch_size=32, lr=0.001, args_str=""):
         train_samples, val_samples, test_samples = get_dataset_size(profile_path)
 
         # Calculate steps per epoch based on dataset sizes
-        steps_per_epoch = (train_samples // global_batch_size) if train_samples else 38
+        steps_per_epoch = (train_samples // global_batch_size) if train_samples else 38 # https://datascience.stackexchange.com/questions/29719/how-to-set-batch-size-steps-per-epoch-and-validation-steps
         validation_steps = (val_samples // global_batch_size) if val_samples else 10
         test_steps = (test_samples // global_batch_size) if test_samples else 10
 
