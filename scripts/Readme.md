@@ -184,20 +184,6 @@ uv run train-model \
 --lr      Learning rate (default: 0.001)
 ```
 
-## Data Format
-
-**Input:** BigEarthNet TIF files
-- Sentinel-1: VV and VH polarization (2 channels)
-- Sentinel-2: B02, B03, B04, B08 bands (4 channels)
-- Reference maps: Pixel-level labels
-
-**Output:** Petastorm parquet format
-- image: 120x120x6 float32 (S1 + S2 combined)
-- label: 120x120 uint8 (256 classes)
-
-**Model:** U-Net encoder-decoder
-- Input: 120x120x6
-- Output: 120x120x256 (softmax)
 
 ## Profiling
 
