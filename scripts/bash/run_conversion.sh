@@ -13,9 +13,9 @@ OUTPUT_BASE="${ROOT_DIR}/${EXPERIMENT_NAME}/petastorm"
 
 # Spark configuration
 EXECUTOR_MEM="8g"
-DRIVER_MEM="4g"
+DRIVER_MEM="8g"
 CORES="4"
-N_EXECUTORS="3"
+N_EXECUTORS="8"
 SPARK_PACKAGES="ch.cern.sparkmeasure:spark-measure_2.12:0.27"
 
 # Data fraction to process
