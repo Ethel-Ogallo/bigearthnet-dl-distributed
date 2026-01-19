@@ -7,9 +7,10 @@ import s3fs
 from petastorm.codecs import NdarrayCodec
 from petastorm.etl.dataset_metadata import materialize_dataset
 from petastorm.unischema import Unischema, UnischemaField, dict_to_spark_row
-from scripts.profiler import Profiler
 from pyspark.sql import SparkSession
 from rasterio.io import MemoryFile
+
+from scripts.profiler import Profiler
 
 
 def read_s3_tif(s3_path):
@@ -27,7 +28,7 @@ def process_patch_stream(row_dict):
     try:
         # Define S2 bands to load
         s2_bands = ["B02", "B03", "B04", "B08"]
-        
+
         # Construct S3 paths for all required files
         s3_paths = {
             "s1_vv": f"{row_dict['s1_path']}/{row_dict['s1_name']}_VV.tif",
@@ -189,7 +190,7 @@ def convert_to_petastorm(
                             .filter(lambda x: x is not None)
                         )
                         # repartition
-                        num_partitions = min(max(50, len(split_df) // 1000), 400)
+                        num_partitions = min(max(50, len(split_df) // 100), 400)
 
                         rows_df = spark.createDataFrame(
                             rows_rdd, InputSchema.as_spark_schema()
@@ -229,7 +230,9 @@ def main():
         default="s3a://ubs-homes/erasmus/raj/dlproject/testpercent/petastorm",
         help="Output Petastorm dataset dir (S3 or local)",
     )
-    parser.add_argument("--p_name", type=str, default="conversion", help="Output profile name")
+    parser.add_argument(
+        "--p_name", type=str, default="conversion", help="Output profile name"
+    )
     parser.add_argument(
         "--frac", type=float, default=0.001, help="Fraction of dataset to sample"
     )
