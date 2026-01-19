@@ -8,6 +8,7 @@
 METADATA_PATH="s3a://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet"
 ROOT_DIR="s3://ubs-homes/erasmus/raj/dlproject/experiments"
 EXPERIMENT_NAME="${1:-experiment_1}"
+DEPLOY_MODE="${2:-cluster}"
 OUTPUT_BASE="${ROOT_DIR}/${EXPERIMENT_NAME}/petastorm"
 
 # Spark configuration
@@ -40,7 +41,7 @@ for frac in "${FRACTIONS[@]}"; do
 
     spark-submit \
         --master yarn \
-        --deploy-mode cluster \
+        --deploy-mode "${DEPLOY_MODE}" \
         --packages "${SPARK_PACKAGES}" \
         scripts/to_petastorm.py \
         --meta "${METADATA_PATH}" \
