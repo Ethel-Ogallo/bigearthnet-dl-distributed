@@ -20,7 +20,7 @@ SPARK_PACKAGES="ch.cern.sparkmeasure:spark-measure_2.12:0.27"
 # Data fraction to process
 # FRACTIONS=(0.01 0.03 0.05 0.07 0.10)
 
-FRACTIONS=(0.07 0.10)
+FRACTIONS=(0.07 0.1)
 
 
 echo "Starting BigEarthNet conversion pipeline"
@@ -45,17 +45,17 @@ for frac in "${FRACTIONS[@]}"; do
         scripts/to_petastorm.py \
         --meta "${METADATA_PATH}" \
         --out "${OUTPUT_DIR}" \
-        --frac "${FRACTION}" \
+        --frac "${frac}" \
         --executor-mem "${EXECUTOR_MEM}" \
         --driver-mem "${DRIVER_MEM}" \
         --core "${CORES}" \
         --n_executor "${N_EXECUTORS}"  
     
     if [ $? -eq 0 ]; then
-        echo "Successfully completed conversion for ${pct}%"
+        echo "Successfully completed conversion for ${frac}%"
         echo ""
     else
-        echo "ERROR: Conversion failed for ${pct}%"
+        echo "ERROR: Conversion failed for ${frac}%"
         exit 1
     fi
 done
