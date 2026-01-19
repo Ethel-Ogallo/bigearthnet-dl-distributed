@@ -57,13 +57,49 @@ def build_unet_model():
     )
 
 
+# def make_dataset(path, epochs, batch_size, shuffle=True):
+#     """Create TensorFlow dataset from Petastorm data"""
+
+#     def gen():
+#         with make_reader(
+#             path,
+#             # num_epochs=epochs, # let petastorm reader supply the data continiously
+#             hdfs_driver="libhdfs3",
+#             reader_pool_type="thread",
+#             workers_count=4,
+#         ) as reader:
+#             for sample in reader:
+#                 yield sample.image, sample.label
+
+#     dataset = tf.data.Dataset.from_generator(
+#         gen,
+#         output_signature=(
+#             tf.TensorSpec(shape=(120, 120, 6), dtype=tf.float32),
+#             tf.TensorSpec(
+#                 shape=(120, 120), dtype=tf.uint8
+#             ),  # we have the value until 999 on class name , so uint16 is required, but if we do 8 it should map the flooded value to 255
+#         ),
+#     )
+
+#     if shuffle:
+#         dataset = dataset.shuffle(2000)
+
+#     dataset = dataset.batch(batch_size, drop_remainder=True)
+#     dataset = (
+#         dataset.repeat()
+#     )  # let tensorflow control the epochs distribution of dataset
+#     dataset = dataset.prefetch(tf.data.AUTOTUNE)
+
+#     return dataset
+
+
 def make_dataset(path, epochs, batch_size, shuffle=True):
     """Create TensorFlow dataset from Petastorm data"""
 
     def gen():
         with make_reader(
             path,
-            # num_epochs=epochs, # let petastorm reader supply the data continiously
+            num_epochs=epochs,
             hdfs_driver="libhdfs3",
             reader_pool_type="thread",
             workers_count=4,
@@ -75,9 +111,7 @@ def make_dataset(path, epochs, batch_size, shuffle=True):
         gen,
         output_signature=(
             tf.TensorSpec(shape=(120, 120, 6), dtype=tf.float32),
-            tf.TensorSpec(
-                shape=(120, 120), dtype=tf.uint8
-            ),  # we have the value until 999 on class name , so uint16 is required, but if we do 8 it should map the flooded value to 255
+            tf.TensorSpec(shape=(120, 120), dtype=tf.uint8),
         ),
     )
 
@@ -85,9 +119,6 @@ def make_dataset(path, epochs, batch_size, shuffle=True):
         dataset = dataset.shuffle(2000)
 
     dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = (
-        dataset.repeat()
-    )  # let tensorflow control the epochs distribution of dataset
     dataset = dataset.prefetch(tf.data.AUTOTUNE)
 
     return dataset
