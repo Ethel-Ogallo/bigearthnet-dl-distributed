@@ -194,9 +194,9 @@ def convert_to_petastorm(
                         profiler.record("num_partitions", num_partitions)
 
                         rows_df = spark.createDataFrame(
-                            rows_rdd,
-                            InputSchema.as_spark_schema().repartition(num_partitions),
+                            rows_rdd, InputSchema.as_spark_schema()
                         )
+                        rows_df = rows_df.repartition(num_partitions)
                         rows_df.write.mode("overwrite").parquet(split_path)
 
                 output_paths[split_name] = split_path
