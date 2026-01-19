@@ -7,15 +7,17 @@
 # Base configuration
 ROOT_DIR="s3://ubs-homes/erasmus/raj/dlproject/experiments"
 EXPERIMENT_NAME="${1:-experiment_1}"
-DATA_BASE="${ROOT_DIR}/${EXPERIMENT_NAME}/petastorm"
+
+
+DATA_BASE="${ROOT_DIR}/petastorm"
 
 # Training hyperparameters
 EPOCHS="10"
 BATCH_SIZE="16"
 LEARNING_RATE="0.001"
 
-# Data percentages to train on
-PERCENTAGES=(1 3 5 7 10)
+FRACTIONS=(0.01 0.03 0.05)
+
 
 echo "Starting BigEarthNet training pipeline"
 echo "Experiment: ${EXPERIMENT_NAME}"
@@ -24,8 +26,8 @@ echo "Training Config: Epochs=${EPOCHS}, Batch Size=${BATCH_SIZE}, Learning Rate
 echo ""
 
 # Train on each percentage
-for pct in "${PERCENTAGES[@]}"; do
-    DATA_DIR="${DATA_BASE}/${pct}percent"
+for pct in "${FRACTIONS[@]}"; do
+    DATA_DIR="${DATA_BASE}/frac_${pct}"
     
     echo "========================================"
     echo "Training on ${pct}% dataset"
@@ -35,6 +37,7 @@ for pct in "${PERCENTAGES[@]}"; do
     uv run train-model \
         --data "${DATA_DIR}" \
         --epochs "${EPOCHS}" \
+        --p_name "${EXPERIMENT_NAME}" \
         --batch "${BATCH_SIZE}" \
         --lr "${LEARNING_RATE}"
     
