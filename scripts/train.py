@@ -7,6 +7,7 @@ import warnings
 
 import tensorflow as tf
 from petastorm import make_reader
+
 from scripts.profiler import Profiler
 
 warnings.filterwarnings("ignore", category=FutureWarning, module="petastorm")
@@ -34,7 +35,7 @@ def build_unet_model():
     return tf.keras.Sequential(
         [
             tf.keras.layers.Input(shape=(120, 120, 6)),
-            # Encoder 
+            # Encoder
             tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
             tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
             tf.keras.layers.MaxPooling2D(),
@@ -43,23 +44,26 @@ def build_unet_model():
             tf.keras.layers.MaxPooling2D(),
             # Bottleneck
             tf.keras.layers.Conv2D(256, 3, activation="relu", padding="same"),
-            # Decoder 
+            # Decoder
             tf.keras.layers.UpSampling2D(),
             tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same"),
             tf.keras.layers.UpSampling2D(),
             tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
             # Output
-            tf.keras.layers.Conv2D(1000, 1, activation="softmax"), # there are only 45 classes but due to class naming we are keepin 1000 here later on for efficient network it is worth mapping the classes before hand , here we would treat rest class as dummy class
+            tf.keras.layers.Conv2D(
+                256, 1, activation="softmax"
+            ),  # there are only 45 classes but due to class naming we are keepin 256 here later on for efficient network it is worth mapping the classes before hand , here we would treat rest class as dummy class
         ]
     )
 
 
 def make_dataset(path, epochs, batch_size, shuffle=True):
     """Create TensorFlow dataset from Petastorm data"""
+
     def gen():
         with make_reader(
             path,
-            # num_epochs=epochs, # let petastorm reader supply the data continiously 
+            # num_epochs=epochs, # let petastorm reader supply the data continiously
             hdfs_driver="libhdfs3",
             reader_pool_type="thread",
             workers_count=4,
@@ -71,7 +75,9 @@ def make_dataset(path, epochs, batch_size, shuffle=True):
         gen,
         output_signature=(
             tf.TensorSpec(shape=(120, 120, 6), dtype=tf.float32),
-            tf.TensorSpec(shape=(120, 120), dtype=tf.uint16), # we have the value until 999 on class name , so uint16 is required 
+            tf.TensorSpec(
+                shape=(120, 120), dtype=tf.uint8
+            ),  # we have the value until 999 on class name , so uint16 is required, but if we do 8 it should map the flooded value to 255
         ),
     )
 
@@ -79,7 +85,9 @@ def make_dataset(path, epochs, batch_size, shuffle=True):
         dataset = dataset.shuffle(2000)
 
     dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = dataset.repeat() # let tensorflow control the epochs distribution of dataset
+    dataset = (
+        dataset.repeat()
+    )  # let tensorflow control the epochs distribution of dataset
     dataset = dataset.prefetch(tf.data.AUTOTUNE)
 
     return dataset
@@ -127,7 +135,9 @@ def verify_s3_paths(base_path):
             print(f"Found s3://{path}")
 
 
-def train_model(data_path, epochs=10, batch_size=32, lr=0.001, p_name="train", args_str=""):
+def train_model(
+    data_path, epochs=10, batch_size=32, lr=0.001, p_name="train", args_str=""
+):
     """Train U-Net model on BigEarthNet Petastorm dataset"""
     profiler = Profiler()
     profiler.log(f"Args: {args_str}")
@@ -171,7 +181,9 @@ def train_model(data_path, epochs=10, batch_size=32, lr=0.001, p_name="train", a
         train_samples, val_samples, test_samples = get_dataset_size(profile_path)
 
         # Calculate steps per epoch based on dataset sizes
-        steps_per_epoch = (train_samples // global_batch_size) if train_samples else 38 # https://datascience.stackexchange.com/questions/29719/how-to-set-batch-size-steps-per-epoch-and-validation-steps
+        steps_per_epoch = (
+            (train_samples // global_batch_size) if train_samples else 38
+        )  # https://datascience.stackexchange.com/questions/29719/how-to-set-batch-size-steps-per-epoch-and-validation-steps
         validation_steps = (val_samples // global_batch_size) if val_samples else 10
         test_steps = (test_samples // global_batch_size) if test_samples else 10
 
@@ -191,7 +203,9 @@ def train_model(data_path, epochs=10, batch_size=32, lr=0.001, p_name="train", a
         test_ds = make_dataset(test_path, epochs, batch_size, shuffle=False)
 
         # Distribute datasets across devices
-        train_ds = strategy.experimental_distribute_dataset(train_ds) # this should handle the shards of dataset automatically 
+        train_ds = strategy.experimental_distribute_dataset(
+            train_ds
+        )  # this should handle the shards of dataset automatically
         val_ds = strategy.experimental_distribute_dataset(val_ds)
         test_ds = strategy.experimental_distribute_dataset(test_ds)
 
@@ -247,13 +261,17 @@ def main():
         default="s3://ubs-homes/erasmus/raj/dlproject/testpercent/petastorm",
         help="Petastorm dataset path (contains train/validation/test)",
     )
-    parser.add_argument("--p_name", type=str, default="train", help="Output profile name")
+    parser.add_argument(
+        "--p_name", type=str, default="train", help="Output profile name"
+    )
     parser.add_argument("--epochs", type=int, default=10, help="Training epochs")
     parser.add_argument("--batch", type=int, default=16, help="Batch size per replica")
     parser.add_argument("--lr", type=float, default=0.001, help="Learning rate")
 
     args = parser.parse_args()
-    train_model(args.data, args.epochs, args.batch, args.lr,args.p_name, args_str=str(args))
+    train_model(
+        args.data, args.epochs, args.batch, args.lr, args.p_name, args_str=str(args)
+    )
 
 
 if __name__ == "__main__":
