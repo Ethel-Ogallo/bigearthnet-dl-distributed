@@ -49,8 +49,7 @@ for frac in "${FRACTIONS[@]}"; do
         --executor-mem "${EXECUTOR_MEM}" \
         --driver-mem "${DRIVER_MEM}" \
         --core "${CORES}" \
-        --n_executor "${N_EXECUTORS}" \
-        > /dev/null 2>&1
+        --n_executor "${N_EXECUTORS}"  
     
     if [ $? -eq 0 ]; then
         echo "Successfully completed conversion for ${pct}%"
