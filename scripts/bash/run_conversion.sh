@@ -40,7 +40,7 @@ for frac in "${FRACTIONS[@]}"; do
 
     spark-submit \
         --master yarn \
-        --deploy-mode client \
+        --deploy-mode cluster \
         --packages "${SPARK_PACKAGES}" \
         scripts/to_petastorm.py \
         --meta "${METADATA_PATH}" \
