@@ -38,6 +38,7 @@ class Profiler:
     def log(self, message):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[{timestamp}] {message}"
+        print(log_entry)
         self.log_messages.append(log_entry)
 
     def record(self, key, value):

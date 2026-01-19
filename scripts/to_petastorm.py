@@ -2,28 +2,87 @@ import os
 import time
 
 import numpy as np
-import pyarrow.parquet as pq
+import pyarrow. parquet as pq
 import s3fs
-from petastorm.codecs import NdarrayCodec
-from petastorm.etl.dataset_metadata import materialize_dataset
+from petastorm. codecs import NdarrayCodec
+from petastorm.etl. dataset_metadata import materialize_dataset
 from petastorm.unischema import Unischema, UnischemaField, dict_to_spark_row
 from pyspark.sql import SparkSession
 from rasterio.io import MemoryFile
 
+# from profiler import Profiler
 from scripts.profiler import Profiler
 
 
-def read_s3_tif(s3_path):
+BIGEARTH_IDS = [
+    111,
+    112,
+    121,
+    122,
+    123,
+    124,
+    131,
+    132,
+    133,
+    141,
+    142,
+    211,
+    212,
+    213,
+    221,
+    222,
+    223,
+    231,
+    241,
+    242,
+    243,
+    244,
+    311,
+    312,
+    313,
+    321,
+    322,
+    323,
+    324,
+    331,
+    332,
+    333,
+    334,
+    335,
+    411,
+    412,
+    421,
+    422,
+    423,
+    511,
+    512,
+    521,
+    522,
+    523,
+    999,
+]
+
+LABEL_MAPPING = np.zeros(1000, dtype=np.uint8)
+for idx, class_id in enumerate(BIGEARTH_IDS):
+    LABEL_MAPPING[class_id] = idx
+
+
+def remap_labels(label_array):
+    """Remap BigEarthNet class IDs to sequential indices"""
+    return LABEL_MAPPING[label_array]
+
+def read_s3_tif(s3_paths, fs):
     """Read TIF file from S3 and return as numpy array"""
-    s3_path = s3_path.replace("s3a://", "s3://")
-    fs = s3fs.S3FileSystem(anon=False)
-    with fs.open(s3_path, "rb") as f:
-        with MemoryFile(f.read()) as memfile:
-            with memfile.open() as dataset:
-                return dataset.read()
+    results = {}
+    for key, s3_path in s3_paths.items():
+        s3_path = s3_path.replace("s3a://", "s3://")
+        with fs.open(s3_path, "rb") as f:
+            with MemoryFile(f.read()) as memfile:
+                with memfile.open() as dataset:
+                    results[key] = dataset.read()[0]
+    return results
 
-
-def process_patch_stream(row_dict):
+def process_patch_stream(row_dict, fs):
     """Process a single patch by loading and combining S1, S2, and label data"""
     try:
         # Define S2 bands to load
@@ -41,10 +100,7 @@ def process_patch_stream(row_dict):
             )
 
         # Load all TIF files from S3
-        file_data = {}
-        for key, path in s3_paths.items():
-            file_data[key] = read_s3_tif(path)[0]
-
+        file_data = read_s3_tif(s3_paths, fs)
         # Combine S1 data (VV and VH polarizations)
         s1_data = np.stack([file_data["s1_vv"], file_data["s1_vh"]], axis=-1).astype(
             np.float32
@@ -54,9 +110,9 @@ def process_patch_stream(row_dict):
             [file_data[f"s2_{band}"] for band in s2_bands], axis=-1
         ).astype(np.float32)
         # Concatenate S1 and S2 to create final image (120x120x6)
-        image = np.concatenate([s1_data, s2_data], axis=-1).astype(np.float32)
-        label = file_data["label"].astype(np.uint8)
+        image = np.concatenate([s1_data, s2_data], axis=-1)
 
+        label = remap_labels(file_data["label"]).astype(np.uint8)
         return {"image": image, "label": label}
     except Exception as e:
         print(f"Error processing {row_dict['patch_id']}: {e}")
@@ -75,6 +131,26 @@ def split_and_sample(df, fraction=1.0):
     return splits["train"], splits["validation"], splits["test"]
 
 
+def process_partition(rows, schema):
+    """Process partition with SHARED S3 connection"""
+    fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name":  "eu-west-1"})
+    
+    for row_dict in rows:
+        try:
+            patch = process_patch_stream(row_dict, fs)
+            yield dict_to_spark_row(schema, {"image": patch["image"], "label": patch["label"]})
+        except Exception as e:
+            print(f"Error processing {row_dict. get('patch_id', 'unknown')}: {e}")
+
+
+def calculate_partitions(num_samples, target_file_mb=50, target_size=(120, 120)):
+    bytes_per_sample = target_size[0] * target_size[1] * 6 * 4 + target_size[0] * target_size[1]
+    estimated_compressed = bytes_per_sample * 0.4
+    samples_per_partition = int((target_file_mb * 1024 * 1024) / estimated_compressed)
+    num_partitions = max(1, (num_samples + samples_per_partition - 1) // samples_per_partition)
+    return num_partitions, samples_per_partition
+
+
 def convert_to_petastorm(
     metadata_path,
     output_dir,
@@ -84,6 +160,7 @@ def convert_to_petastorm(
     driver_mem="4g",
     core=4,
     n_executor=3,
+    target_file_mb=50,
     p_name="conversion",
     args_str="",
 ):
@@ -94,7 +171,8 @@ def convert_to_petastorm(
     # Step 1: Read metadata parquet file
     with profiler.step("read_metadata"):
         print(f"Reading metadata from {metadata_path}")
-        table = pq.read_table(metadata_path.replace("s3a://", "s3://"))
+        fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": "eu-west-1"})
+        table = pq.read_table(metadata_path.replace("s3a://", "s3://"), filesystem=fs)
         df = table.to_pandas()
         print(f"Total patches: {len(df)}")
     profiler.record("fraction", fraction)
@@ -103,7 +181,7 @@ def convert_to_petastorm(
     # Step 2: Split data into train/val/test and sample fraction
     with profiler.step("split_and_sample", fraction=fraction):
         train_df, val_df, test_df = split_and_sample(df, fraction)
-        datasets = {"train": train_df, "validation": val_df, "test": test_df}
+        datasets = {"train": train_df, "validation": val_df, "test":  test_df}
 
     profiler.record("train_samples", len(train_df))
     profiler.record("validation_samples", len(val_df))
@@ -159,54 +237,40 @@ def convert_to_petastorm(
             if split_df.empty:
                 continue
 
-            print(f"\nProcessing {split_name} split ({len(split_df)} patches)...")
+            profiler.log(f"Processing {split_name} split ({len(split_df)} patches)...")
+    
+            num_partitions, samples_per_partition = calculate_partitions(
+                len(split_df), target_file_mb, target_size
+            )
+            
+            profiler.log(f"Partitions: {num_partitions} (~{samples_per_partition} samples/partition, ~{target_file_mb}MB/file)")
+            profiler.record(f"{split_name}_num_partitions", num_partitions)
+            profiler.record(f"{split_name}_samples_per_partition", samples_per_partition)
 
-            with profiler.step(f"process_{split_name}", patches=len(split_df)):
-                rowgroup_size_mb = 256
+            split_path = os.path.join(output_dir, split_name)
+            if not split_path.startswith(("s3://", "s3a://")):
+                os.makedirs(split_path, exist_ok=True)
 
-                def row_generator(index):
-                    row = split_df.iloc[index]
-                    patch = process_patch_stream(row)
-                    if patch:
-                        return dict_to_spark_row(
-                            InputSchema,
-                            {"image": patch["image"], "label": patch["label"]},
-                        )
-                    return None
+            # Write Petastorm dataset using Spark
+            with profiler.step(f"write_{split_name}_parquet"):
+                with materialize_dataset(spark, split_path, InputSchema, target_file_mb):
+                    rows_data = split_df.to_dict("records")
+                    
+                    rows_rdd = sc.parallelize(rows_data, num_partitions).mapPartitions(
+                        lambda partition: process_partition(partition, InputSchema)
+                    )
+                    
+                    rows_df = spark.createDataFrame(rows_rdd, InputSchema.as_spark_schema())
+                    rows_df.write.mode("overwrite").parquet(split_path)
 
-                split_path = os.path.join(output_dir, split_name)
-                if not split_path.startswith(("s3://", "s3a://")):
-                    os.makedirs(split_path, exist_ok=True)
-
-                # Write Petastorm dataset using Spark
-                with profiler.step(f"write_{split_name}_parquet"):
-                    with materialize_dataset(
-                        spark, split_path, InputSchema, rowgroup_size_mb
-                    ):
-                        # Parallelize data processing across Spark cluster
-                        rows_rdd = (
-                            sc.parallelize(range(len(split_df)))
-                            .map(row_generator)
-                            .filter(lambda x: x is not None)
-                        )
-                        # repartition
-                        num_partitions = min(max(50, len(split_df) // 100), 1000)
-                        profiler.record("num_partitions", num_partitions)
-
-                        rows_df = spark.createDataFrame(
-                            rows_rdd, InputSchema.as_spark_schema()
-                        )
-                        rows_df = rows_df.repartition(num_partitions)
-                        rows_df.write.mode("overwrite").parquet(split_path)
-
-                output_paths[split_name] = split_path
-                print(f"{split_name} dataset saved:  {split_path}")
+            output_paths[split_name] = split_path
+            profiler.log(f"{split_name} dataset saved:  {split_path}")
 
     finally:
         # Step 5: Clean up Spark resources
         with profiler.step("spark_stop"):
             spark.stop()
-            print("Spark session stopped.")
+            profiler.log("Spark session stopped.")
 
     # Step 6: Save profiling data
     profiler.save(output_dir, name=p_name)
@@ -245,6 +309,12 @@ def main():
     )
     parser.add_argument("--core", type=int, default=2)
     parser.add_argument("--n_executor", type=int, default=2)
+    parser.add_argument(
+        "--target-file-mb", 
+        type=int, 
+        default=15, 
+        help="Target parquet file size in MB"
+    )
     args = parser.parse_args()
 
     start_time = time.time()
@@ -257,6 +327,7 @@ def main():
         driver_mem=args.driver_mem,
         core=args.core,
         n_executor=args.n_executor,
+        target_file_mb=args.target_file_mb,
         p_name=args.p_name,
         args_str=str(args),
     )
