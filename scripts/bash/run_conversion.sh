@@ -18,7 +18,10 @@ N_EXECUTORS="3"
 SPARK_PACKAGES="ch.cern.sparkmeasure:spark-measure_2.12:0.27"
 
 # Data fraction to process
-FRACTIONS=(0.01 0.03 0.05 0.07 0.10)
+# FRACTIONS=(0.01 0.03 0.05 0.07 0.10)
+
+FRACTIONS=(0.07 0.10)
+
 
 echo "Starting BigEarthNet conversion pipeline"
 echo "Experiment: ${EXPERIMENT_NAME}"
