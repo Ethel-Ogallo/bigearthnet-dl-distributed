@@ -16,7 +16,6 @@ EXECUTOR_MEM="8g"
 DRIVER_MEM="8g"
 CORES="4"
 N_EXECUTORS="8"
-SPARK_PACKAGES="ch.cern.sparkmeasure:spark-measure_2.12:0.27"
 
 # Data fraction to process
 FRACTIONS=(0.01 0.03 0.05 0.07 0.10)
@@ -28,7 +27,6 @@ echo "Starting BigEarthNet conversion pipeline"
 echo "Experiment: ${EXPERIMENT_NAME}"
 echo "Output base: ${OUTPUT_BASE}"
 echo "Spark Config: Executors=${N_EXECUTORS}, Cores=${CORES}, Executor Memory=${EXECUTOR_MEM}, Driver Memory=${DRIVER_MEM}"
-echo "Spark Packages: ${SPARK_PACKAGES}"
 echo ""
 
 # Run for each fraction
@@ -42,7 +40,6 @@ for frac in "${FRACTIONS[@]}"; do
     spark-submit \
         --master yarn \
         --deploy-mode "${DEPLOY_MODE}" \
-        --packages "${SPARK_PACKAGES}" \
         scripts/to_petastorm.py \
         --meta "${METADATA_PATH}" \
         --out "${OUTPUT_DIR}" \

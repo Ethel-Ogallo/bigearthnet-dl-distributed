@@ -66,7 +66,7 @@ def make_dataset(path, epochs, batch_size, shuffle=True):
             # num_epochs=epochs, # let petastorm reader supply the data continiously
             hdfs_driver="libhdfs3",
             reader_pool_type="thread",
-            workers_count=4,
+            workers_count=8,
         ) as reader:
             for sample in reader:
                 yield sample.image, sample.label
