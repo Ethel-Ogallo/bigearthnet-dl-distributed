@@ -196,6 +196,11 @@ def train_model(
     profiler.record("test_samples", test_samples)
     profiler.record("steps_per_epoch", steps_per_epoch)
 
+    num_shards = strategy.num_replicas_in_sync
+    profiler.record("num_shards", num_shards)
+
+    print(f"Creating datasets with {num_shards} shards...")
+
     # Step 5: Load and prepare datasets
     with profiler.step("load_datasets"):
         train_ds = make_dataset(train_path, epochs, batch_size, shuffle=True)

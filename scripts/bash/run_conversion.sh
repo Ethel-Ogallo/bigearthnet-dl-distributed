@@ -8,13 +8,14 @@
 METADATA_PATH="s3a://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet"
 ROOT_DIR="s3://ubs-homes/erasmus/raj/dlproject/experiments"
 EXPERIMENT_NAME="${1:-experiment_1}"
+DEPLOY_MODE="${2:-cluster}"
 OUTPUT_BASE="${ROOT_DIR}/${EXPERIMENT_NAME}/petastorm"
 
 # Spark configuration
 EXECUTOR_MEM="8g"
-DRIVER_MEM="4g"
+DRIVER_MEM="8g"
 CORES="4"
-N_EXECUTORS="3"
+N_EXECUTORS="8"
 SPARK_PACKAGES="ch.cern.sparkmeasure:spark-measure_2.12:0.27"
 
 # Data fraction to process
@@ -40,7 +41,7 @@ for frac in "${FRACTIONS[@]}"; do
 
     spark-submit \
         --master yarn \
-        --deploy-mode cluster \
+        --deploy-mode "${DEPLOY_MODE}" \
         --packages "${SPARK_PACKAGES}" \
         scripts/to_petastorm.py \
         --meta "${METADATA_PATH}" \

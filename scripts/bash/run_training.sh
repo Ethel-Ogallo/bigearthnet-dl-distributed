@@ -6,11 +6,13 @@
 
 # Base configuration
 ROOT_DIR="s3://ubs-homes/erasmus/raj/dlproject/experiments"
+
 EXPERIMENT_NAME="${1:-experiment_1}"
 
+DATASET_FOLDER="${2:-petastorm}"
 
-DATA_BASE="${ROOT_DIR}/petastorm"
 
+DATA_BASE="${ROOT_DIR}/${DATASET_FOLDER}"
 # Training hyperparameters
 EPOCHS="10"
 BATCH_SIZE="16"
