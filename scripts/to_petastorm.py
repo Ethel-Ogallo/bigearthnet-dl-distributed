@@ -188,8 +188,12 @@ def convert_to_petastorm(
                             .map(row_generator)
                             .filter(lambda x: x is not None)
                         )
+                        # repartition
+                        num_partitions = min(max(50, len(split_df) // 1000), 400)
+
                         rows_df = spark.createDataFrame(
                             rows_rdd, InputSchema.as_spark_schema()
+                            .repartition(num_partitions)
                         )
                         rows_df.write.mode("overwrite").parquet(split_path)
 
