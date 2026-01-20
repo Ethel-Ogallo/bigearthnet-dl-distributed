@@ -179,9 +179,9 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, args=None):
                 continue
 
             # calculate partitions , we need to control the size of the output files , initially we did by controlling the parition numbers but if we can approx estimate filesize why not do it by file size ?
-            bytes_per_row = (120 * 120 * 6 * 4) + (
+            bytes_per_row = (120 * 120 * 6) + (
                 120 * 120
-            )  # it is coming from above schema , 4 image bands with 120/120 image size and labels is basically 120/120
+            )  # it is coming from above schema , 6 image bands with 120/120 image size and labels is basically 120/120
             rows_per_file = int(
                 (args.target_file_mb * 1024**2) / (bytes_per_row * 0.4)
             )  # 0.4 compression factor, i am putting this as approximate , idk honestly how much is the compression factor as it depends upon the type of the data being compressed
