@@ -164,6 +164,7 @@ def train_model(
 ):
     profiler = Profiler()
     profiler.log(f"Args: {args_str}")
+    profiler.record("no_gpus_input", no_of_gpus)
 
     base_cache_dir = None
     train_cache = None
