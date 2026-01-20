@@ -42,6 +42,7 @@ class Profiler:
         self.log_messages.append(log_entry)
 
     def record(self, key, value):
+        print(f"Recorded : {key} = {value}")
         self.metrics["summary"][key] = value
 
     def save(self, output_dir, name="profile"):
