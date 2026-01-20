@@ -5,6 +5,7 @@
 ROOT_DIR="s3://ubs-homes/erasmus/raj/dlproject/experiments"
 EXPERIMENT_NAME="${1:-experiment_1}"
 TRAIN_PROFILE_NAME="${2:-train}"
+NO_OF_GPUS="${3:-4}"
 
 DATA_BASE="${ROOT_DIR}/${EXPERIMENT_NAME}/petastorm"
 
@@ -27,7 +28,8 @@ for pct in "${FRACTIONS[@]}"; do
         --epochs "${EPOCHS}" \
         --p_name "${TRAIN_PROFILE_NAME}" \
         --batch "${BATCH_SIZE}" \
-        --lr "${LEARNING_RATE}"
+        --lr "${LEARNING_RATE}" \
+        --no_of_gpus "${NO_OF_GPUS}" \
     
     if [ $? -eq 0 ]; then
         echo "Success: ${pct}%"
