@@ -32,7 +32,7 @@ for pct in "${FRACTIONS[@]}"; do
         --epochs "${EPOCHS}" \
         --p_name "${TRAIN_PROFILE_NAME}" \
         --batch "${BATCH_SIZE}" \
-        --lr "${LEARNING_RATE}"
+        --lr "${LEARNING_RATE}" \
         --enable-cache
     
     if [ $? -eq 0 ]; then
