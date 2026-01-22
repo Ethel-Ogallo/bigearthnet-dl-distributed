@@ -45,13 +45,14 @@ for n_exec in "${N_EXECUTORS[@]}"; do
             --driver-mem "${DRIVER_MEM}" \
             --core "${CORES}" \
             --n_executor "${n_exec}" \
-            --target-file-mb "${TARGET_FILE_MB}" \
+            --target-file-mb "${TARGET_FILE_MB}"
             # --p_name "${P_NAME}"
-        
+
         if [ $? -eq 0 ]; then
             echo "Success: fraction=${frac}, executors=${n_exec}"
         else
             echo "ERROR: Failed fraction=${frac}, executors=${n_exec}"
             exit 1
         fi
+    done
 done
