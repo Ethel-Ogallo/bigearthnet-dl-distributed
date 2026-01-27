@@ -11,7 +11,7 @@ import warnings
 import s3fs
 import tensorflow as tf
 from petastorm import make_reader
-from keras_unet_collection import models
+from tensorflow.keras import layers, Model
 
 from scripts.profiler import Profiler
 
@@ -41,9 +41,47 @@ def log_gpu_info(profiler):
     return len(gpus)
 
 
-def build_model():
-    return models.unet_2d(input_shape=(120, 120, 6), num_classes=45)
 
+def build_model():
+    # model architecture based on : https://www.geeksforgeeks.org/deep-learning/image-segmentation-using-u-net/
+    def double_conv_block(x, n_filters):
+        x = layers.Conv2D(n_filters, 3, padding="same", activation="relu", kernel_initializer="he_normal")(x)
+        x = layers.Conv2D(n_filters, 3, padding="same", activation="relu", kernel_initializer="he_normal")(x)
+        return x
+
+    def downsample_block(x, n_filters):
+        f = double_conv_block(x, n_filters)
+        p = layers.MaxPooling2D(2)(f)
+        return f, p
+
+    def upsample_block(x, conv_features, n_filters):
+        x = layers.Conv2DTranspose(n_filters, 3, strides=2, padding="same")(x)
+        x = layers.concatenate([x, conv_features])
+        x = double_conv_block(x, n_filters)
+        return x
+
+    inputs = layers.Input(shape=(120, 120, 6))
+    x = layers.Resizing(128, 128)(inputs)
+    # encoder
+    f1, p1 = downsample_block(x, 64)
+    f2, p2 = downsample_block(p1, 128)
+    f3, p3 = downsample_block(p2, 256)
+    f4, p4 = downsample_block(p3, 512)
+
+    # bridge
+    bottleneck = double_conv_block(p4, 1024)
+
+    # decoder
+    u6 = upsample_block(bottleneck, f4, 512)
+    u7 = upsample_block(u6, f3, 256)
+    u8 = upsample_block(u7, f2, 128)
+    u9 = upsample_block(u8, f1, 64)
+
+    # output 
+    x_out = layers.Conv2D(45, 1, padding="same", activation="softmax")(u9)
+    final_output = layers.Resizing(120, 120)(x_out)
+
+    return Model(inputs, final_output, name="U-Net")
 
 def make_dataset(
     path,
@@ -183,11 +221,12 @@ def train_model(
             verify_s3_paths(data_path)
 
         with profiler.step("strategy_init"):
-            lr = lr * no_of_gpus
-            profiler.log(f"Adjusted learning rate: {lr}")
-            profiler.record("learning_rate", lr)
-
             if no_of_gpus is not None:
+            
+                lr = lr * no_of_gpus
+                profiler.log(f"Adjusted learning rate: {lr}")
+                profiler.record("learning_rate", lr)
+                
                 devices = [f"GPU:{i}" for i in range(no_of_gpus)]
                 strategy = tf.distribute.MirroredStrategy(devices=devices)
             else:
