@@ -11,6 +11,7 @@ import warnings
 import s3fs
 import tensorflow as tf
 from petastorm import make_reader
+from keras_unet_collection import models
 
 from scripts.profiler import Profiler
 
@@ -41,23 +42,7 @@ def log_gpu_info(profiler):
 
 
 def build_model():
-    return tf.keras.Sequential(
-        [
-            tf.keras.layers.Input(shape=(120, 120, 6)),
-            tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
-            tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
-            tf.keras.layers.MaxPooling2D(),
-            tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same"),
-            tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same"),
-            tf.keras.layers.MaxPooling2D(),
-            tf.keras.layers.Conv2D(256, 3, activation="relu", padding="same"),
-            tf.keras.layers.UpSampling2D(),
-            tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same"),
-            tf.keras.layers.UpSampling2D(),
-            tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same"),
-            tf.keras.layers.Conv2D(45, 1, activation="softmax"),
-        ]
-    )
+    return models.unet_2d(input_shape=(120, 120, 6), num_classes=45)
 
 
 def make_dataset(
@@ -72,7 +57,6 @@ def make_dataset(
         reader_kwargs = {
             "dataset_url": path,
             "num_epochs": None,  # we are controlling from tf side
-            "hdfs_driver": "libhdfs3",
             "reader_pool_type": "thread",  # threads is throwing me pygilstate release bug , TODO : if it is also throwing bug on cluster consider switching to process
             "workers_count": min(multiprocessing.cpu_count(), 8),
         }
@@ -199,6 +183,9 @@ def train_model(
             verify_s3_paths(data_path)
 
         with profiler.step("strategy_init"):
+            lr = lr * no_of_gpus
+            profiler.log(f"Adjusted learning rate: {lr}")
+            profiler.record("learning_rate", lr)
 
             if no_of_gpus is not None:
                 devices = [f"GPU:{i}" for i in range(no_of_gpus)]

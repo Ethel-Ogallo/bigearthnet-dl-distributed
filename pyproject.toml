@@ -19,6 +19,7 @@ dependencies = [
     "pandas<2",
     "rasterio>=1.3.10",
     "s3fs>=2025.2.0",
+    "keras-unet-collection>=0.1.13",
 ]
 
 [project.scripts]
