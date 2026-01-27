@@ -11,7 +11,6 @@ import warnings
 import s3fs
 import tensorflow as tf
 from petastorm import make_reader
-from tensorflow.keras import layers, Model
 
 from scripts.profiler import Profiler
 
@@ -43,46 +42,23 @@ def log_gpu_info(profiler):
 
 
 def build_model():
-    # model architecture based on : https://www.geeksforgeeks.org/deep-learning/image-segmentation-using-u-net/
-    def double_conv_block(x, n_filters):
-        x = layers.Conv2D(n_filters, 3, padding="same", activation="relu", kernel_initializer="he_normal")(x)
-        x = layers.Conv2D(n_filters, 3, padding="same", activation="relu", kernel_initializer="he_normal")(x)
-        return x
-
-    def downsample_block(x, n_filters):
-        f = double_conv_block(x, n_filters)
-        p = layers.MaxPooling2D(2)(f)
-        return f, p
-
-    def upsample_block(x, conv_features, n_filters):
-        x = layers.Conv2DTranspose(n_filters, 3, strides=2, padding="same")(x)
-        x = layers.concatenate([x, conv_features])
-        x = double_conv_block(x, n_filters)
-        return x
-
-    inputs = layers.Input(shape=(120, 120, 6))
-    x = layers.Resizing(128, 128)(inputs)
-    # encoder
-    f1, p1 = downsample_block(x, 64)
-    f2, p2 = downsample_block(p1, 128)
-    f3, p3 = downsample_block(p2, 256)
-    f4, p4 = downsample_block(p3, 512)
-
-    # bridge
-    bottleneck = double_conv_block(p4, 1024)
-
-    # decoder
-    u6 = upsample_block(bottleneck, f4, 512)
-    u7 = upsample_block(u6, f3, 256)
-    u8 = upsample_block(u7, f2, 128)
-    u9 = upsample_block(u8, f1, 64)
-
-    # output 
-    x_out = layers.Conv2D(45, 1, padding="same", activation="softmax")(u9)
-    final_output = layers.Resizing(120, 120)(x_out)
-
-    return Model(inputs, final_output, name="U-Net")
-
+    inputs = tf.keras.layers.Input(shape=(120, 120, 6))
+    x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(inputs)
+    x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(x)
+    res = tf.keras.layers.Conv2D(64, 1, padding="same")(inputs)
+    x = tf.keras.layers.Add()([x, res])
+    x = tf.keras.layers.MaxPooling2D()(x)
+    x = tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same")(x)
+    x = tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same")(x)
+    x = tf.keras.layers.MaxPooling2D()(x)
+    x = tf.keras.layers.Conv2D(256, 3, activation="relu", padding="same")(x)
+    x = tf.keras.layers.UpSampling2D()(x)
+    x = tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same")(x)
+    x = tf.keras.layers.UpSampling2D()(x)
+    x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(x)
+    outputs = tf.keras.layers.Conv2D(45, 1, activation="softmax")(x)
+    return tf.keras.Model(inputs, outputs)
+    
 def make_dataset(
     path,
     batch_size,
