@@ -179,8 +179,8 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, args=None):
                 continue
 
             # calculate partitions , we need to control the size of the output files , initially we did by controlling the parition numbers but if we can approx estimate filesize why not do it by file size ?
-            bytes_per_row = (120 * 120 * 6) + (
-                120 * 120
+            bytes_per_row = (120 * 120 * 6 * 4 ) + (
+                120 * 120 # * 4 is back again because image is float 32 and label is uint8 , so 8*4 , 
             )  # it is coming from above schema , 6 image bands with 120/120 image size and labels is basically 120/120
             rows_per_file = int(
                 (args.target_file_mb * 1024**2) / (bytes_per_row * 0.4)
@@ -225,7 +225,7 @@ def main():
     parser.add_argument("--driver-mem", default="4g")
     parser.add_argument("--core", type=int, default=2)
     parser.add_argument("--n_executor", type=int, default=2)
-    parser.add_argument("--target-file-mb", type=int, default=20)
+    parser.add_argument("--target-file-mb", type=int, default=50)
     args = parser.parse_args()
 
     t0 = time.time()
