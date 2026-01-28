@@ -5,7 +5,6 @@ import json
 import math
 import multiprocessing
 import os
-import shutil
 import warnings
 
 import s3fs
@@ -23,16 +22,21 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="petastorm")
 warnings.filterwarnings("ignore", category=FutureWarning, module="pyarrow")
 
 
+def record_metrics(profiler, **kwargs):
+    for k, v in kwargs.items():
+        profiler.record(k, v)
+
+
 def log_gpu_info(profiler):
-    """Log GPU detection details."""
     gpus = tf.config.list_physical_devices("GPU")
     profiler.log(f"GPUs detected: {len(gpus)}")
     profiler.record("gpu_count", len(gpus))
     if gpus:
         for i, gpu in enumerate(gpus):
             try:
-                details = tf.config.experimental.get_device_details(gpu)
-                profiler.log(f"GPU {i}: {details}")
+                profiler.log(
+                    f"GPU {i}: {tf.config.experimental.get_device_details(gpu)}"
+                )
             except Exception:
                 pass
     else:
@@ -40,13 +44,13 @@ def log_gpu_info(profiler):
     return len(gpus)
 
 
-
 def build_model():
     inputs = tf.keras.layers.Input(shape=(120, 120, 6))
     x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(inputs)
     x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(x)
-    res = tf.keras.layers.Conv2D(64, 1, padding="same")(inputs)
-    x = tf.keras.layers.Add()([x, res])
+    x = tf.keras.layers.Add()(
+        [x, tf.keras.layers.Conv2D(64, 1, padding="same")(inputs)]
+    )
     x = tf.keras.layers.MaxPooling2D()(x)
     x = tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same")(x)
     x = tf.keras.layers.Conv2D(128, 3, activation="relu", padding="same")(x)
@@ -58,37 +62,16 @@ def build_model():
     x = tf.keras.layers.Conv2D(64, 3, activation="relu", padding="same")(x)
     outputs = tf.keras.layers.Conv2D(45, 1, activation="softmax")(x)
     return tf.keras.Model(inputs, outputs)
-    
-def make_dataset(
-    path,
-    batch_size,
-    dataset_size,
-    shuffle=True,
-    cache_dir=None,
-):
-    def gen():
 
+
+def make_dataset(path, batch_size, dataset_size, shuffle=True):
+    def gen():
         reader_kwargs = {
             "dataset_url": path,
-            "num_epochs": None,  # we are controlling from tf side
-            "reader_pool_type": "thread",  # threads is throwing me pygilstate release bug , TODO : if it is also throwing bug on cluster consider switching to process
+            "num_epochs": None,
+            "reader_pool_type": "thread",
             "workers_count": min(multiprocessing.cpu_count(), 8),
         }
-        if (
-            cache_dir
-        ):  # i am placing this as optional incase in server s3 reading works fine and no need to cache on local disk
-            reader_kwargs.update(
-                {
-                    "cache_type": "local-disk",
-                    "cache_location": cache_dir,
-                    "cache_size_limit": 10
-                    * 1024
-                    * 1024
-                    * 1024,  # 10GB limit , TODO : if efs has space restriction , get rid of this
-                    "cache_row_size_estimate": 1024 * 1024,  # ~1MB per row
-                }
-            )
-
         with make_reader(**reader_kwargs) as reader:
             for sample in reader:
                 yield sample.image, sample.label
@@ -102,9 +85,8 @@ def make_dataset(
     )
 
     if shuffle:
-        buffer_size = min(2000, dataset_size)
         dataset = dataset.shuffle(
-            buffer_size
+            min(2000, dataset_size)
         )  # this is important for ram usage because shuffle gonna fill up buffer size n images from s3 to ram and send it to gpu with randomness
 
     options = tf.data.Options()
@@ -112,7 +94,6 @@ def make_dataset(
         tf.data.experimental.AutoShardPolicy.DATA
     )  # tell tf to shard data across gpus no matter what the source is , shard from beginning
     dataset = dataset.with_options(options)
-
     dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.prefetch(
         tf.data.AUTOTUNE
@@ -121,9 +102,11 @@ def make_dataset(
 
 
 def normalize_path(path):
-    if not path.startswith(("s3://", "file://")):
-        return f"file://{os.path.abspath(path)}"
-    return path
+    return (
+        f"file://{os.path.abspath(path)}"
+        if not path.startswith(("s3://", "file://"))
+        else path
+    )
 
 
 def get_dataset_size(path, profiler):
@@ -132,7 +115,6 @@ def get_dataset_size(path, profiler):
         is_s3 = path.startswith(("s3://", "s3a://"))
         opener = s3fs.S3FileSystem(anon=False).open if is_s3 else open
         p = path.replace("s3a://", "s3://") if is_s3 else path.replace("file://", "")
-
         with opener(p, "r") as f:
             s = json.load(f)["summary"]
             return s["train_samples"], s["validation_samples"], s["test_samples"]
@@ -157,38 +139,13 @@ def train_model(
     lr=0.001,
     p_name="train",
     args_str="",
-    enable_cache=False,
     no_of_gpus=None,
+    enable_lr_scaling=False,
 ):
     profiler = Profiler()
     profiler.log(f"Args: {args_str}")
     profiler.record("no_gpus_input", no_of_gpus)
 
-    base_cache_dir = None
-    train_cache = None
-    val_cache = None
-    test_cache = None
-    profiler.record("cache_enabled", enable_cache)
-
-    if (
-        enable_cache
-    ):  # in local, it needs to download the image from s3 and store it somewhere so that petastorm reader can read from local disk instead of going to s3 every time
-        base_cache_dir = os.path.join(
-            os.getcwd(), "tmp", "petastorm_cache"
-        )  # Usually placing this in system level /tmp is safe because each time device restarts its gonna cleanup tmp but here i am placing in working dir as i have suscpicion that efs permission we have we can write in our home dir only
-        train_cache = os.path.join(base_cache_dir, "train")
-        val_cache = os.path.join(base_cache_dir, "val")
-        test_cache = os.path.join(base_cache_dir, "test")
-
-        if os.path.exists(base_cache_dir):
-            shutil.rmtree(base_cache_dir)
-        os.makedirs(base_cache_dir, exist_ok=True)
-
-        os.makedirs(train_cache, exist_ok=True)
-        os.makedirs(val_cache, exist_ok=True)
-        os.makedirs(test_cache, exist_ok=True)
-        profiler.record("petastorm_cache_dir", base_cache_dir)
-        profiler.log(f"Petastorm local disk cache enabled at {base_cache_dir}")
     try:
         with profiler.step("gpu_setup"):
             log_gpu_info(profiler)
@@ -198,25 +155,28 @@ def train_model(
 
         with profiler.step("strategy_init"):
             if no_of_gpus is not None:
-            
-                lr = lr * no_of_gpus
-                profiler.log(f"Adjusted learning rate: {lr}")
+                if enable_lr_scaling:
+                    lr = lr * no_of_gpus
+                    profiler.log(f"Adjusted learning rate: {lr}")
                 profiler.record("learning_rate", lr)
-                
-                devices = [f"GPU:{i}" for i in range(no_of_gpus)]
-                strategy = tf.distribute.MirroredStrategy(devices=devices)
+                strategy = tf.distribute.MirroredStrategy(
+                    devices=[f"GPU:{i}" for i in range(no_of_gpus)]
+                )
             else:
                 strategy = (
                     tf.distribute.MirroredStrategy()
                 )  # works for multiple gpus on single machine
             profiler.log(f"Number of gpu devices: {strategy.num_replicas_in_sync}")
-            profiler.record("strategy", strategy.__class__.__name__)
-            profiler.record("num_replicas_in_sync", strategy.num_replicas_in_sync)
             global_batch = batch_size * strategy.num_replicas_in_sync
-            profiler.record("batch_size_per_replica", batch_size)
-            profiler.record("global_batch_size", global_batch)
             profiler.log(
                 f"Global batch: {global_batch} ({strategy.num_replicas_in_sync} replicas)"
+            )
+            record_metrics(
+                profiler,
+                strategy=strategy.__class__.__name__,
+                num_replicas_in_sync=strategy.num_replicas_in_sync,
+                batch_size_per_replica=batch_size,
+                global_batch_size=global_batch,
             )
 
         with profiler.step("dataset_metadata"):
@@ -232,44 +192,29 @@ def train_model(
             val_steps = math.ceil(v_samples / global_batch) if v_samples else 10
             test_steps = math.ceil(te_samples / global_batch) if te_samples else 10
             samples_per_epoch = steps_per_epoch * global_batch
-            profiler.record("train_samples", t_samples)
-            profiler.record("validation_samples", v_samples)
-            profiler.record("test_samples", te_samples)
-            profiler.record("steps_per_epoch", steps_per_epoch)
-            profiler.record("samples_per_epoch", samples_per_epoch)
             profiler.log(f"samples/epoch: {samples_per_epoch}")
             profiler.log(f"steps/epoch: {steps_per_epoch}")
+            record_metrics(
+                profiler,
+                train_samples=t_samples,
+                validation_samples=v_samples,
+                test_samples=te_samples,
+                steps_per_epoch=steps_per_epoch,
+                samples_per_epoch=samples_per_epoch,
+            )
 
             with profiler.step("load_datasets"):
                 with profiler.step("load_train"):
                     train_ds = strategy.experimental_distribute_dataset(
-                        make_dataset(
-                            train_path,
-                            global_batch,
-                            t_samples,
-                            True,
-                            cache_dir=train_cache,
-                        )
+                        make_dataset(train_path, global_batch, t_samples, True)
                     )
                 with profiler.step("load_validation"):
                     val_ds = strategy.experimental_distribute_dataset(
-                        make_dataset(
-                            val_path,
-                            global_batch,
-                            v_samples,
-                            False,
-                            cache_dir=val_cache,
-                        )
+                        make_dataset(val_path, global_batch, v_samples, False)
                     )
                 with profiler.step("load_test"):
                     test_ds = strategy.experimental_distribute_dataset(
-                        make_dataset(
-                            test_path,
-                            global_batch,
-                            te_samples,
-                            False,
-                            cache_dir=test_cache,
-                        )
+                        make_dataset(test_path, global_batch, te_samples, False)
                     )
 
         with profiler.step("build_model"):
@@ -285,7 +230,7 @@ def train_model(
         callbacks = [
             tf.keras.callbacks.EarlyStopping(
                 monitor="val_loss", patience=5, restore_best_weights=True
-            ),
+            )
         ]
 
         with profiler.step("training", epochs=epochs):
@@ -301,18 +246,12 @@ def train_model(
         with profiler.step("evaluation"):
             test_loss, test_acc = model.evaluate(test_ds, steps=test_steps)
             profiler.log(f"Test Loss: {test_loss:.4f}, Acc: {test_acc:.4f}")
-            profiler.record("test_loss", test_loss)
-            profiler.record("test_accuracy", test_acc)
+            record_metrics(profiler, test_loss=test_loss, test_accuracy=test_acc)
 
         profiler.save(data_path, name=p_name)
         return model, history
     finally:
-        if enable_cache and base_cache_dir and os.path.exists(base_cache_dir):
-            try:
-                shutil.rmtree(base_cache_dir)
-                profiler.log(f"Cleaned up cache at {base_cache_dir}")
-            except Exception as e:
-                profiler.log(f"Warning: Failed to cleanup cache {base_cache_dir}: {e}")
+        pass
 
 
 def main():
@@ -325,11 +264,7 @@ def main():
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--gpus", type=int, default=None)
     parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument(
-        "--enable-cache",
-        action="store_true",
-        help="Enable local disk caching for Petastorm readers",
-    )
+    parser.add_argument("--enable_lr_scaling", default=False, action="store_true")
     args = parser.parse_args()
     train_model(
         args.data,
@@ -338,8 +273,8 @@ def main():
         args.lr,
         args.p_name,
         str(args),
-        args.enable_cache,
         args.gpus,
+        args.enable_lr_scaling,
     )
 
 

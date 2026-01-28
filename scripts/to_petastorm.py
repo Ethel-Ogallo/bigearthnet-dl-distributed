@@ -1,7 +1,10 @@
 import argparse
+import json
 import os
 import time
 import warnings
+from contextlib import contextmanager
+from datetime import datetime
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -12,9 +15,112 @@ from petastorm.unischema import Unischema, UnischemaField, dict_to_spark_row
 from pyspark.sql import SparkSession
 from rasterio.io import MemoryFile
 
-from scripts.profiler import Profiler
+# from scripts.profiler import Profiler
 
 # from profiler import Profiler # run this if you are using docker standalone scripts
+
+
+class Profiler:
+    def __init__(self):
+        self.metrics = {
+            "start_time": datetime.now().isoformat(),
+            "steps": [],
+            "summary": {},
+        }
+        self.step_stack = []
+        self.log_messages = []
+
+    @contextmanager
+    def step(self, name, **meta):
+        start = time.time()
+        step_data = {"name": name, "start": start, **meta}
+        self.step_stack.append(step_data)
+        try:
+            yield
+        finally:
+            duration = time.time() - start
+            step_data["duration"] = duration
+            step_data["end"] = time.time()
+            self.step_stack.pop()
+            self.metrics["steps"].append(
+                {
+                    "name": name,
+                    "duration": duration,
+                    "timestamp": datetime.fromtimestamp(start).isoformat(),
+                    **meta,
+                }
+            )
+
+    def log(self, message):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] {message}"
+        print(log_entry)
+        self.log_messages.append(log_entry)
+
+    def record(self, key, value):
+        print(f"Recorded : {key} = {value}")
+        self.metrics["summary"][key] = value
+
+    def save(self, output_dir, name="profile"):
+        import s3fs
+
+        self.metrics["end_time"] = datetime.now().isoformat()
+        total = sum(s["duration"] for s in self.metrics["steps"])
+        self.metrics["summary"]["total_duration"] = total
+
+        is_s3 = output_dir.startswith(("s3://", "s3a://"))
+        base_dir = output_dir.replace("s3a://", "s3://") if is_s3 else output_dir
+        profile_dir = f"{base_dir}/profile"
+
+        json_path = f"{profile_dir}/{name}_profile.json"
+        log_path = f"{profile_dir}/{name}_profile.log"
+
+        json_content = json.dumps(self.metrics, indent=2)
+        log_lines = [f"Profile Report - {self.metrics['start_time']}\n{'='*60}\n"]
+
+        if self.log_messages:
+            log_lines.append("\nLog Messages:\n")
+            for msg in self.log_messages:
+                log_lines.append(f"{msg}\n")
+            log_lines.append(f"\n{'='*60}\n")
+
+        log_lines.append("\nStep Durations:\n")
+        for step in self.metrics["steps"]:
+            meta_str = ", ".join(
+                f"{k}={v}"
+                for k, v in step.items()
+                if k not in ["name", "duration", "timestamp"]
+            )
+            meta_info = f" ({meta_str})" if meta_str else ""
+            log_lines.append(f"{step['name']}{meta_info}:  {step['duration']:.2f}s\n")
+
+        log_lines.append(f"\n{'='*60}\n")
+        log_lines.append(
+            f"Total:  {self.metrics['summary']. get('total_duration', 0):.2f}s\n"
+        )
+
+        for key, val in self.metrics["summary"].items():
+            if key != "total_duration":
+                log_lines.append(f"{key}: {val}\n")
+
+        log_content = "".join(log_lines)
+
+        if is_s3:
+            fs = s3fs.S3FileSystem()
+            with fs.open(json_path, "w") as f:
+                f.write(json_content)
+            with fs.open(log_path, "w") as f:
+                f.write(log_content)
+        else:
+            import os
+
+            os.makedirs(profile_dir, exist_ok=True)
+            with open(json_path, "w") as f:
+                f.write(json_content)
+            with open(log_path, "w") as f:
+                f.write(log_content)
+
+        print(f"\nProfile saved:  {json_path}, {log_path}")
 
 
 warnings.filterwarnings("ignore")
@@ -159,8 +265,25 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, args=None):
             .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.1")
             .config("spark.executor.memory", args.executor_mem)
             .config("spark.driver.memory", args.driver_mem)
-            .config("spark.executor.instances", args.n_executor)
             .config("spark.executor.cores", args.core)
+            .config("spark.driver.maxResultSize", "512m")
+            .config("spark.executor.instances", str(args.n_executor))
+            .config(
+                "spark.serializer", "org.apache.spark.serializer.KryoSerializer"
+            )  # memory efficient serializer source : https://www.javaspring.net/blog/java-lang-outofmemoryerror-java-heap-space-spark/
+            .config(
+                "spark.sql.shuffle.partitions",
+                str((args.core * args.n_executor) * 4),
+            )  # rule of thumb : 2-4 partitions per core
+            .config(
+                "spark.sql.files.maxPartitionBytes", "268435456"
+            )  # 256MB # intiial partition size
+            .config(
+                "spark.sql.adaptive.enabled", "true"
+            )  # let spark optimize the shuffle partitions
+            .config(
+                "spark.sql.adaptive.advisoryPartitionSizeInBytes", "134217728"
+            )  # 128MB # source : https://spark.apache.org/docs/latest/sql-performance-tuning.html
             .getOrCreate()
         )
 
@@ -179,8 +302,9 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, args=None):
                 continue
 
             # calculate partitions , we need to control the size of the output files , initially we did by controlling the parition numbers but if we can approx estimate filesize why not do it by file size ?
-            bytes_per_row = (120 * 120 * 6 * 4 ) + (
-                120 * 120 # * 4 is back again because image is float 32 and label is uint8 , so 8*4 , 
+            bytes_per_row = (120 * 120 * 6 * 4) + (
+                120
+                * 120  # * 4 is back again because image is float 32 and label is uint8 , so 8*4 ,
             )  # it is coming from above schema , 6 image bands with 120/120 image size and labels is basically 120/120
             rows_per_file = int(
                 (args.target_file_mb * 1024**2) / (bytes_per_row * 0.4)
