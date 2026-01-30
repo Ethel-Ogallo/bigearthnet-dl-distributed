@@ -444,9 +444,9 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, args=None):
             min_partitions = (
                 args.core * args.n_executor * 2
             )  # Ensure at least 2 partitions per core for efficient parallelism
-            # spark_partitions = max(
-            #     data_based_partitions, min_partitions
-            # )  # Use the larger value to ensure both data distribution and parallelism
+            spark_partitions = min(
+                data_based_partitions, min_partitions
+            )  # Use the larger value to ensure both data distribution and parallelism
 
             spark_partitions = data_based_partitions
 
