@@ -4,12 +4,12 @@ import argparse
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import boto3
 import pyarrow.parquet as pq
+import s3fs
 from tqdm import tqdm
 
 
-def check_s3_folder_exists(s3_client, s3_path):
+def check_s3_folder_exists(fs, s3_path):
     """Check if S3 folder exists by listing objects with the prefix.
 
     Why: S3 doesn't have real directories. We check if any objects exist with the path prefix.
@@ -18,15 +18,15 @@ def check_s3_folder_exists(s3_client, s3_path):
     if not s3_path or not isinstance(s3_path, str) or not s3_path.startswith("s3://"):
         return False
 
-    path_parts = s3_path.replace("s3://", "").split("/", 1)
-    bucket = path_parts[0]
-    prefix = path_parts[1] if len(path_parts) > 1 else ""
+    path = s3_path.replace("s3://", "")
+    if not path.endswith("/"):
+        path += "/"
 
-    if not prefix.endswith("/"):
-        prefix += "/"
-
-    response = s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix, MaxKeys=1)
-    return "Contents" in response
+    try:
+        contents = fs.ls(path, detail=False)
+        return len(contents) > 0
+    except Exception:
+        return False
 
 
 def check_patch_files(row_dict):
@@ -34,7 +34,7 @@ def check_patch_files(row_dict):
 
     Uses parallel checking within each patch to reduce latency (3 files checked concurrently).
     """
-    s3_client = boto3.client("s3")
+    fs = s3fs.S3FileSystem()
     paths = {
         "s1": row_dict["s1_path"],
         "s2": row_dict["s2_path"],
@@ -43,7 +43,7 @@ def check_patch_files(row_dict):
     results = {}
     with ThreadPoolExecutor(max_workers=3) as executor:
         future_to_key = {
-            executor.submit(check_s3_folder_exists, s3_client, path): key
+            executor.submit(check_s3_folder_exists, fs, path): key
             for key, path in paths.items()
         }
         for future in as_completed(future_to_key):
@@ -98,7 +98,6 @@ def check_files(metadata_path, output_path, fraction=1.0, workers=50):
             except Exception as e:
                 print(f"Error: {e}")
 
-    # Aggregate results
     all_found = sum(1 for r in results_list if r["all_exist"])
     not_found = len(results_list) - all_found
     missing_patches = [r for r in results_list if not r["all_exist"]]
@@ -110,23 +109,13 @@ def check_files(metadata_path, output_path, fraction=1.0, workers=50):
         "total_checked": len(results_list),
         "fraction_used": fraction,
     }
-    results = {
-        "all_files_found": all_found,
-        "not_found": not_found,
-        "missing_patches": missing_patches,
-        "total_checked": len(results_list),
-        "fraction_used": fraction,
-    }
 
-    # Write results to S3 or local file
     json_output = json.dumps(results, indent=2)
 
     if output_path.startswith("s3://"):
-        s3_client = boto3.client("s3")
-        bucket, key = output_path.replace("s3://", "").split("/", 1)
-        s3_client.put_object(
-            Bucket=bucket, Key=key, Body=json_output, ContentType="application/json"
-        )
+        fs = s3fs.S3FileSystem()
+        with fs.open(output_path, "w") as f:
+            f.write(json_output)
         print(f"Results written to {output_path}")
     else:
         with open(output_path, "w") as f:
