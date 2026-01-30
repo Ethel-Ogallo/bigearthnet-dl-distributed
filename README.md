@@ -54,7 +54,6 @@ bigearthnet-dl-distributed/
 │   ├── check.py                 # Validate S3 file availability
 │   ├── to_petastorm.py          # Convert TIF to Petastorm format
 │   ├── train.py                 # Train U-Net segmentation model
-│   ├── profiler.py              # Performance profiling utility
 │   └── Readme.md                # Detailed script documentation
 ├── notebooks/                    # Jupyter notebooks for exploration
 ├── experiments/                  # Experiment outputs and results
