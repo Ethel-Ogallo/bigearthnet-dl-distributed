@@ -435,7 +435,7 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, args=None):
 
             spark_partitions = min(
                 len(split_df), args.core * args.n_executor * 4
-            )  # Ensure at least 2 partitions per core for efficient parallelism
+            )  # Ensure at least 4 partitions per core for efficient parallelism
 
             profiler.log(
                 f"Processing {name}: {len(split_df)} rows, {spark_partitions} spark partitions"
