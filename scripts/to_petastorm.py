@@ -1,5 +1,9 @@
-"""Convert BigEarthNet TIF files to Petastorm format for distributed deep learning.
+"""
+Convert BigEarthNet TIF files to Petastorm format for distributed deep learning.
+Authors: Kshitij Raj & Ethel Ogallo
+Last Updated: 30-01-2026
 
+Description:
 This script orchestrates the complete data pipeline:
 1. Reads metadata with S3 paths for Sentinel-1, Sentinel-2, and reference maps
 2. Splits data into train/validation/test sets (maintaining existing splits)
@@ -13,6 +17,9 @@ Key design decisions:
 - Generates detailed performance profiles for conversion analysis
 """
 
+# ------------------ 
+# IMPORTS
+# ------------------
 import argparse
 import json
 import os
@@ -21,7 +28,6 @@ import time
 import warnings
 from contextlib import contextmanager
 from datetime import datetime
-
 import numpy as np
 import psutil
 import pyarrow.parquet as pq
@@ -33,11 +39,15 @@ from pyspark.sql import SparkSession
 from rasterio.io import MemoryFile
 
 
+# -------------------------------
+# SYSTEM PROFILING UTILITIES
+# -------------------------------
 def get_host_info():
-    """Collect system information for profiling.
+    """
+    Collect system information for profiling.
 
-    Captures hardware configuration to understand performance characteristics
-    and resource constraints during conversion.
+    Captures CPU count, RAM, host name, platform, and GPU info if available.
+    Useful for understanding performance characteristics during conversion.
     """
     info = {
         "hostname": platform.node(),
@@ -46,9 +56,8 @@ def get_host_info():
         "ram_gb": round(psutil.virtual_memory().total / (1024**3), 2),
     }
     try:
-        import tensorflow as tf  # TensorFlow might not be available in Spark workers, so check conditionally
-
-        gpus = tf.config.list_physical_devices("GPU")
+        import tensorflow as tf
+        gpus = tf.config.list_physical_devices("GPU") # get GPU info if available
         if gpus:
             info["cuda"] = {
                 "device_count": len(gpus),
@@ -58,11 +67,15 @@ def get_host_info():
         pass
     return info
 
-
+# -------------------------------
+# RESOURCE USAGE MONITORING
+# -------------------------------
 def get_usage():
-    """Capture current resource utilization for profiling.
+    """
+    Capture current resource utilization for profiling.
 
-    Monitors CPU, RAM, and GPU usage to identify bottlenecks during conversion.
+    Monitors CPU, RAM, and GPU memory usage (if TensorFlow is available),
+    enabling identification of potential bottlenecks during conversion.
     """
     usage = {
         "cpu_percent": psutil.cpu_percent(),
@@ -71,13 +84,12 @@ def get_usage():
     }
     try:
         import tensorflow as tf
-
-        gpus = tf.config.list_physical_devices("GPU")
+        gpus = tf.config.list_physical_devices("GPU") # get GPU info if available
         if gpus:
             gpu_usage = []
             for i, g in enumerate(gpus):
                 try:
-                    mem_info = tf.config.experimental.get_memory_info(g.name)
+                    mem_info = tf.config.experimental.get_memory_info(g.name) # in bytes
                     gpu_usage.append(
                         {
                             "device": i,
@@ -93,7 +105,21 @@ def get_usage():
     return usage
 
 
+# -------------------------------
+# PROFILER CLASS TO TRACK DATA CONVERSION METRICS
+# -------------------------------
+
 class Profiler:
+    """
+    Tracks execution times, system usage, and logs during data conversion.
+
+    Features:
+    - Nested step tracking with duration and metadata
+    - Periodic resource logging (CPU, RAM, GPU)
+    - Saves JSON and log summaries to local or S3
+    """
+
+    # Initialization
     def __init__(self):
         self.metrics = {
             "start_time": datetime.now().isoformat(),
@@ -104,8 +130,11 @@ class Profiler:
         self.step_stack = []
         self.log_messages = []
 
-    @contextmanager
+    # -------------------------------
+    # Context Manager for Steps
+    # -------------------------------
     def step(self, name, **meta):
+        """Context manager for profiling a specific step."""
         start = time.time()
         step_data = {"name": name, "start": start, **meta}
         self.step_stack.append(step_data)
@@ -125,25 +154,35 @@ class Profiler:
                 }
             )
 
+    # -------------------------------
+    # Logging and Recording
+    # -------------------------------
     def log(self, message):
+        """Log a message with current CPU/RAM/GPU usage."""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         usage = get_usage()
-        usage_str = f"CPU:{usage['cpu_percent']}% RAM:{usage['ram_used_gb']}GB({usage['ram_percent']}%)"
+        usage_str = f"CPU:{usage['cpu_percent']}% RAM:{usage['ram_used_gb']}GB({usage['ram_percent']}%)" # RAM usage
         if "cuda" in usage:
             for g in usage["cuda"]:
                 if g["memory_used_gb"] is not None:
                     usage_str += f" GPU{g['device']}:{g['memory_used_gb']}GB"
         log_entry = f"[{timestamp}] [{usage_str}] {message}"
         print(log_entry)
-        self.log_messages.append(
-            {"timestamp": timestamp, "message": message, "usage": usage}
-        )
+        self.log_messages.append({"timestamp": timestamp, "message": message, "usage": usage})
 
+    # -------------------------------
+    # Recording Summary Metrics
+    # -------------------------------
     def record(self, key, value):
+        """Record a summary metric."""
         print(f"Recorded : {key} = {value}")
         self.metrics["summary"][key] = value
 
+    # -------------------------------
+    # Save Profiling Results
+    # -------------------------------
     def save(self, output_dir, name="profile"):
+        """Save profiling metrics and logs to JSON and text files."""
         import s3fs
 
         self.metrics["end_time"] = datetime.now().isoformat()
@@ -158,13 +197,11 @@ class Profiler:
         json_path = f"{profile_dir}/{name}_profile.json"
         log_path = f"{profile_dir}/{name}_profile.log"
 
+        # Prepare JSON and human-readable logs
         json_content = json.dumps(self.metrics, indent=2)
         log_lines = [f"Profile Report - {self.metrics['start_time']}\n{'='*60}\n"]
-
         hi = self.metrics["host_info"]
-        log_lines.append(
-            f"Host: {hi['hostname']} | CPU: {hi['cpu_count']} cores | RAM: {hi['ram_gb']}GB"
-        )
+        log_lines.append(f"Host: {hi['hostname']} | CPU: {hi['cpu_count']} cores | RAM: {hi['ram_gb']}GB")
         if "cuda" in hi:
             log_lines.append(f" | CUDA: {hi['cuda']['device_count']} GPU(s)")
         log_lines.append(f"\n{'='*60}\n")
@@ -178,25 +215,20 @@ class Profiler:
                     for g in u["cuda"]:
                         if g["memory_used_gb"] is not None:
                             usage_str += f" GPU{g['device']}:{g['memory_used_gb']}GB"
-                log_lines.append(
-                    f"[{entry['timestamp']}] [{usage_str}] {entry['message']}\n"
-                )
+                log_lines.append(f"[{entry['timestamp']}] [{usage_str}] {entry['message']}\n")
             log_lines.append(f"\n{'='*60}\n")
 
+        # -------------------------------
+        # Step Durations
+        # -------------------------------
         log_lines.append("\nStep Durations:\n")
         for step in self.metrics["steps"]:
-            meta_str = ", ".join(
-                f"{k}={v}"
-                for k, v in step.items()
-                if k not in ["name", "duration", "timestamp"]
-            )
+            meta_str = ", ".join(f"{k}={v}" for k, v in step.items() if k not in ["name", "duration", "timestamp"])
             meta_info = f" ({meta_str})" if meta_str else ""
             log_lines.append(f"{step['name']}{meta_info}:  {step['duration']:.2f}s\n")
 
         log_lines.append(f"\n{'='*60}\n")
-        log_lines.append(
-            f"Total:  {self.metrics['summary'].get('total_duration', 0):.2f}s\n"
-        )
+        log_lines.append(f"Total:  {self.metrics['summary'].get('total_duration', 0):.2f}s\n")
 
         for key, val in self.metrics["summary"].items():
             if key != "total_duration":
@@ -211,8 +243,6 @@ class Profiler:
             with fs.open(log_path, "w") as f:
                 f.write(log_content)
         else:
-            import os
-
             os.makedirs(profile_dir, exist_ok=True)
             with open(json_path, "w") as f:
                 f.write(json_content)
@@ -222,113 +252,70 @@ class Profiler:
         print(f"\nProfile saved:  {json_path}, {log_path}")
 
 
+# -------------------------------
+# LABEL MAPPING FOR BIGEARTHNET CLASSES
+# -------------------------------
 warnings.filterwarnings("ignore")
 
-# BigEarthNet uses specific CORINE Land Cover class IDs (not sequential 0-44)
-# We map them to sequential indices for efficient one-hot encoding in the model
+# Map BigEarthNet CORINE Land Cover IDs to sequential indices for efficient training
 BIGEARTH_IDS = [
-    111,
-    112,
-    121,
-    122,
-    123,
-    124,
-    131,
-    132,
-    133,
-    141,
-    142,
-    211,
-    212,
-    213,
-    221,
-    222,
-    223,
-    231,
-    241,
-    242,
-    243,
-    244,
-    311,
-    312,
-    313,
-    321,
-    322,
-    323,
-    324,
-    331,
-    332,
-    333,
-    334,
-    335,
-    411,
-    412,
-    421,
-    422,
-    423,
-    511,
-    512,
-    521,
-    522,
-    523,
-    999,
+    111, 112, 121, 122, 123, 124, 131, 132, 133, 141, 142,
+    211, 212, 213, 221, 222, 223, 231, 241, 242, 243, 244,
+    311, 312, 313, 321, 322, 323, 324, 331, 332, 333, 334, 335,
+    411, 412, 421, 422, 423, 511, 512, 521, 522, 523, 999
 ]
-# Create lookup table: CORINE class ID -> model class index (0-44)
+
 LABEL_MAPPING = np.zeros(1000, dtype=np.uint8)
 for idx, class_id in enumerate(BIGEARTH_IDS):
     LABEL_MAPPING[class_id] = idx
 
 
+# -------------------------------
+# DATA PARTITION PROCESSING 
+# -------------------------------
 def process_partition(rows, schema):
-    """Process partition with optimized bulk S3 reads.
-
-    Why bulk reads: Fetching files one-by-one from S3 is slow due to latency.
-    The s3fs.cat() API fetches multiple files in parallel, dramatically reducing
-    total I/O time when processing thousands of satellite image patches.
     """
-    # region_name specified because default region may fail for some AWS accounts
+    Convert a partition of BigEarthNet rows to Spark rows with Petastorm schema.
+
+    Optimizations:
+    - Bulk S3 reads (fs.cat) to fetch multiple TIF files in parallel
+    - MemoryFile for in-memory TIF reading
+    - Concatenates S1 and S2 bands
+    - Maps labels to sequential indices
+    """
     fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": "eu-west-1"})
 
     for row in rows:
         try:
-
             def clean(p):
-                # s3fs library doesn't support s3a:// protocol, only s3://
                 return p.replace("s3a://", "").replace("s3://", "")
 
-            # 1. Map logical names to S3 paths
+            # Map logical names to S3 paths
             s2_bands = ["B02", "B03", "B04", "B08"]
             path_map = {
                 "s1_vv": clean(f"{row['s1_path']}/{row['s1_name']}_VV.tif"),
                 "s1_vh": clean(f"{row['s1_path']}/{row['s1_name']}_VH.tif"),
-                "label": clean(
-                    f"{row['reference_path']}/{row['patch_id']}_reference_map.tif"
-                ),
+                "label": clean(f"{row['reference_path']}/{row['patch_id']}_reference_map.tif"),
             }
             for b in s2_bands:
-                path_map[f"s2_{b}"] = clean(
-                    f"{row['s2_path']}/{row['patch_id']}_{b}.tif"
-                )
+                path_map[f"s2_{b}"] = clean(f"{row['s2_path']}/{row['patch_id']}_{b}.tif")
 
-            # 2. Bulk fetch all files in parallel
-            # fs.cat() fetches multiple S3 objects concurrently, significantly faster
-            # than sequential reads. Returns dict {path: bytes}
+            # Bulk fetch all files in parallel
             raw_files = fs.cat(list(path_map.values()))
 
-            # 3. load results bytes to numpy in memory
+            # Load TIF bytes into numpy arrays
             results = {}
             for key, path in path_map.items():
                 with MemoryFile(raw_files[path]) as mem:
                     with mem.open() as ds:
                         results[key] = ds.read(1)
 
-            # 4. Stack
+            # Stack bands and concatenate
             s1 = np.stack([results["s1_vv"], results["s1_vh"]], axis=-1)
             s2 = np.stack([results[f"s2_{b}"] for b in s2_bands], axis=-1)
-
             image = np.concatenate([s1, s2], axis=-1).astype(np.float32)
-            # 5. Map CORINE labels to sequential indices for efficient model training
-            # This normalization reduces memory and enables direct indexing
+
+            # Map labels to sequential indices
             label = LABEL_MAPPING[results["label"]].astype(np.uint8)
 
             yield dict_to_spark_row(schema, {"image": image, "label": label})
@@ -337,76 +324,63 @@ def process_partition(rows, schema):
             print(f"Skipping {row.get('patch_id', 'unknown')}: {e}")
 
 
+# -------------------------------
+# CONVERT DATA TO PETASTORM FORMAT
+# -------------------------------
 def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, args=None):
-    """Convert BigEarthNet TIF files to Petastorm format using Apache Spark.
+    """
+    Main conversion function from BigEarthNet TIFs to Petastorm format using Spark.
 
-    Why Petastorm: Provides efficient data loading for TensorFlow/PyTorch with:
-    - Columnar Parquet storage for fast I/O
-    - Schema validation and type safety
-    - Native integration with distributed training
-
-    Why Spark: Enables parallel processing of 500k+ satellite images by distributing
-    work across multiple executors, significantly reducing conversion time.
+    Features:
+    - Reads metadata and optionally samples fraction
+    - Splits into train/validation/test
+    - Initializes Spark session with optimized configurations
+    - Writes each split to Petastorm with profiling
     """
     profiler = Profiler()
-    profiler.log(
-        f"Starting conversion with fraction {fraction}, {args.n_executor} exec"
-    )
+    profiler.log(f"Starting conversion with fraction {fraction}, {args.n_executor} exec")
 
-    # Read Metadata
+    # Read metadata
     with profiler.step("read_metadata"):
         fs = s3fs.S3FileSystem(anon=False, client_kwargs={"region_name": "eu-west-1"})
         table = pq.read_table(metadata_path.replace("s3a://", "s3://"), filesystem=fs)
         df = table.to_pandas()
 
-    # Split
+    # Split and sample
     splits = {}
     for split in ["train", "validation", "test"]:
         sub_df = df[df["split"] == split]
         if fraction < 1.0:
-            # Random sampling within each split to maintain distribution
             sub_df = sub_df.sample(frac=fraction, random_state=42)
         splits[split] = sub_df.reset_index(drop=True)
         profiler.record(f"{split}_samples", len(sub_df))
 
-    # Init Spark
+    # Initialize Spark
     with profiler.step("spark_init"):
-
         spark = (
             SparkSession.builder.appName("petastorm_bigearthnet")
             .config(
                 "spark.hadoop.fs.s3a.aws.credentials.provider",
                 "com.amazonaws.auth.DefaultAWSCredentialsProviderChain",
             )
-            .config(
-                "spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem"
-            )
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
             .config("spark.jars.packages", "org.apache.hadoop:hadoop-aws:3.3.1")
             .config("spark.executor.memory", args.executor_mem)
             .config("spark.driver.memory", args.driver_mem)
             .config("spark.executor.cores", args.core)
             .config("spark.driver.maxResultSize", "512m")
             .config("spark.executor.instances", str(args.n_executor))
-            .config(
-                "spark.serializer", "org.apache.spark.serializer.KryoSerializer"
-            )  # Kryo is more memory-efficient than Java serializer for binary data
-            .config(
-                "spark.sql.shuffle.partitions",
-                str((args.core * args.n_executor) * 4),
-            )  # rule of thumb : 2-4 partitions per core
-            .config(
-                "spark.sql.files.maxPartitionBytes", "268435456"
-            )  # 256MB # intiial partition size
-            .config(
-                "spark.sql.adaptive.enabled", "true"
-            )  # let spark optimize the shuffle partitions
-            .config(
-                "spark.sql.adaptive.advisoryPartitionSizeInBytes", "134217728"
-            )  # 128MB # source : https://spark.apache.org/docs/latest/sql-performance-tuning.html
+            .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+            .config("spark.sql.shuffle.partitions", str((args.core * args.n_executor) * 4))
+            .config("spark.sql.files.maxPartitionBytes", "268435456")
+            .config("spark.sql.adaptive.enabled", "true")
+            .config("spark.sql.adaptive.advisoryPartitionSizeInBytes", "134217728")
             .getOrCreate()
         )
 
     sc = spark.sparkContext
+
+    # Define Petastorm schema
     schema = Unischema(
         "InputSchema",
         [
@@ -415,41 +389,33 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, args=None):
         ],
     )
 
+    # Write each split to Petastorm
     try:
-
         total_rows = sum(len(s) for s in splits.values())
-        bytes_per_row = (120 * 120 * 6 * 4) + (
-            120 * 120
-        )  # Schema: 6 image bands (120x120, float32) + label (120x120, uint8)
+        bytes_per_row = (120 * 120 * 6 * 4) + (120 * 120)
         dataset_size_gb = round((total_rows * bytes_per_row) / (1024**3), 2)
         profiler.record("total_rows", total_rows)
         profiler.record("dataset_size_gb", dataset_size_gb)
-
+ 
         for name, split_df in splits.items():
             if split_df.empty:
                 continue
-
-            # internal spark partitions: based on data size with target_file_mb as partition size
+            
+            # Estimate data size and partition using the number of executors and cores
             total_data_bytes = len(split_df) * bytes_per_row
             profiler.record(f"{name}_total_data_size_gb", total_data_bytes / (1024**3))
 
-            spark_partitions = min(
-                len(split_df), args.core * args.n_executor * 4
-            )  # Ensure at least 4 partitions per core for efficient parallelism
-
-            profiler.log(
-                f"Processing {name}: {len(split_df)} rows, {spark_partitions} spark partitions"
-            )
+            spark_partitions = min(len(split_df), args.core * args.n_executor * 4)
+            profiler.log(f"Processing {name}: {len(split_df)} rows, {spark_partitions} spark partitions")
 
             out_path = os.path.join(output_dir, name)
 
+            # Write Petastorm dataset using spark
             with profiler.step(f"write_{name}"):
                 with materialize_dataset(spark, out_path, schema, args.target_file_mb):
                     rdd = sc.parallelize(split_df.to_dict("records"), spark_partitions)
                     rdd = rdd.mapPartitions(lambda x: process_partition(x, schema))
-
                     profiler.record(f"{name}_rdd_partitions", rdd.getNumPartitions())
-
                     df_spark = spark.createDataFrame(rdd, schema.as_spark_schema())
                     df_spark.write.mode("overwrite").parquet(out_path)
 
@@ -463,26 +429,27 @@ def convert_to_petastorm(metadata_path, output_dir, fraction=1.0, args=None):
         profiler.save(output_dir, name=args.p_name)
 
 
+# -------------------------------
+# MAIN ARGUMENT PARSER
+# -------------------------------
 def main():
+    """
+    Parse arguments and run Petastorm conversion pipeline.
+    """
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--meta",
-        default="s3a://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet",
-    )
-    parser.add_argument(
-        "--out", default="s3a://ubs-homes/erasmus/raj/dlproject/testpercent/petastorm"
-    )
-    parser.add_argument("--p_name", default="conversion")
-    parser.add_argument("--frac", type=float, default=0.001)
-    parser.add_argument("--executor-mem", default="4g")
-    parser.add_argument("--driver-mem", default="4g")
-    parser.add_argument("--core", type=int, default=2)
-    parser.add_argument("--n_executor", type=int, default=2)
-    parser.add_argument("--target-file-mb", type=int, default=50)
+    parser.add_argument("--meta", default="s3a://ubs-homes/erasmus/raj/dlproject/metadata_with_paths.parquet") # metadata_with_paths.parquet
+    parser.add_argument("--out", default="s3a://ubs-homes/erasmus/raj/dlproject/testpercent/petastorm") # petastorm output
+    parser.add_argument("--p_name", default="conversion") # profile name
+    parser.add_argument("--frac", type=float, default=0.001) # fraction to process
+    parser.add_argument("--executor-mem", default="4g") # executor memory
+    parser.add_argument("--driver-mem", default="4g") # driver memory
+    parser.add_argument("--core", type=int, default=2) # number of cores
+    parser.add_argument("--n_executor", type=int, default=2) # number of executors
+    parser.add_argument("--target-file-mb", type=int, default=50) # target file size in MB
     args = parser.parse_args()
 
-    t0 = time.time()
-    convert_to_petastorm(args.meta, args.out, args.frac, args)
+    t0 = time.time()  # start timer
+    convert_to_petastorm(args.meta, args.out, args.frac, args) # run conversion
     print(f"Total time: {time.time() - t0:.2f}s")
 
 
